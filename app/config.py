@@ -9,14 +9,16 @@ class Settings:
     library: Path = field(default_factory=lambda: Path(os.getenv("MUSIC_DIR", "data/music")).resolve())
     inbox: Path = field(default_factory=lambda: Path(os.getenv("INBOX_DIR", "data/inbox")).resolve())
     state: Path = field(default_factory=lambda: Path(os.getenv("STATE_DIR", "data/state")).resolve())
-    password: str = field(default_factory=lambda: os.getenv("APP_PASSWORD", ""))
+    password: str = field(default_factory=lambda: os.getenv("APP_PASSWORD", ""), repr=False)
     slskd_url: str = field(default_factory=lambda: os.getenv("SLSKD_URL", "http://localhost:5030").rstrip("/"))
-    slskd_key: str = field(default_factory=lambda: os.getenv("SLSKD_API_KEY", ""))
+    slskd_key: str = field(default_factory=lambda: os.getenv("SLSKD_API_KEY", ""), repr=False)
     navidrome_url: str = field(default_factory=lambda: os.getenv("NAVIDROME_URL", ""))
     secure_cookie: bool = field(default_factory=lambda: os.getenv("COOKIE_SECURE", "false").lower() == "true")
     slskd_managed_auth: bool = field(default_factory=lambda: os.getenv("SLSKD_MANAGED_AUTH", "false").lower() == "true")
     slskd_admin_user: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_USER", "archive"))
-    slskd_admin_password: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_PASSWORD", ""))
+    slskd_admin_password: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_PASSWORD", ""), repr=False)
+    outbound_proxy: str = field(default_factory=lambda: os.getenv("OUTBOUND_PROXY", ""), repr=False)
+    soulseek_login_timeout: int = field(default_factory=lambda: max(5, min(120, int(os.getenv("SOULSEEK_LOGIN_TIMEOUT", "45")))))
 
     def prepare(self):
         if len(self.password) < 12:

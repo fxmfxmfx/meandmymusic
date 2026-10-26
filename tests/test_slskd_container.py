@@ -23,6 +23,7 @@ async def test_pinned_slskd_key_admin_login_config_reload_and_tmpfs(tmp_path):
                         slskd_url="http://127.0.0.1:5030", slskd_managed_auth=True,
                         slskd_admin_password=values["APP_PASSWORD"])
     settings.prepare()
+    settings.outbound_proxy = "socks5://proxy-user:temporary-proxy-password@proxy.invalid:1080"
     client = Soulseek(settings)
     account = SoulseekAccount(settings, client)
     assert isinstance(await client.request("GET", "/application"), dict)
@@ -42,10 +43,15 @@ async def test_pinned_slskd_key_admin_login_config_reload_and_tmpfs(tmp_path):
         options = await client.request("GET", "/options", bearer=token)
         assert options["soulseek"]["username"] == username
         assert options["soulseek"]["password"] != password
+        proxy = options["soulseek"]["connection"]["proxy"]
+        assert proxy["enabled"] is True and proxy["address"] == "proxy.invalid" and proxy["port"] == 1080
+        assert proxy["password"] != "temporary-proxy-password"
+        assert isinstance(await client.request("GET", "/logs/live"), list)
         assert (await client.request("GET", "/server"))["isLoggedIn"] is False
         for file in Path(values.get("SLSKD_STATE_PATH", "data/slskd")).rglob("*"):
             if file.is_file():
                 assert password.encode() not in file.read_bytes(), f"Plaintext password found in persistent file {file.name}"
+                assert b"temporary-proxy-password" not in file.read_bytes()
     finally:
         await account.configure()
     async with httpx.AsyncClient(trust_env=False) as web:

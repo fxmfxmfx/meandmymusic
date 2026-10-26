@@ -159,7 +159,7 @@ def main():
         print(json.dumps({"error": "--url must use http:// or https://"}), file=sys.stderr)
         return 1
     try:
-        with httpx.Client(base_url=args.url.rstrip("/"), timeout=40, follow_redirects=False, trust_env=False,
+        with httpx.Client(base_url=args.url.rstrip("/"), timeout=150, follow_redirects=False, trust_env=False,
                           headers={"X-Requested-With": "meandmymusic"}) as client:
             result = execute(args, client)
         print(json.dumps(result, ensure_ascii=False, indent=2))

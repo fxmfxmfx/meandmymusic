@@ -12,7 +12,7 @@ const folder = (name) => ({name, path:name, directory:true, modified:1700000000,
 const file = (name) => ({name, path:name, directory:false, audio:true, modified:1700000000, size:12345});
 const tick = () => new Promise(resolve => setTimeout(resolve, 20));
 
-async function fixture(authenticated=true) {
+async function fixture(authenticated=true, authFailure=null) {
   const calls = [], errors = [];
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
@@ -35,7 +35,7 @@ async function fixture(authenticated=true) {
     else if(path.pathname==='/api/login') {authenticated=true;result={ok:true};}
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
     else if(path.pathname==='/api/soulseek/auth/status') result=account;
-    else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Вход подтверждён'};}
+    else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Вход подтверждён'};}}
     else if(path.pathname==='/api/soulseek/auth/logout') {account={...account,logged_in:false,username:null,saved:false};result=account;}
     else if(path.pathname==='/api/files') result={path:path.searchParams.get('path')||'.',entries:path.searchParams.get('path')?[]:entries};
     else if(path.pathname==='/api/metadata') result={title:'Song',artist:'Test Artist',duration:61,bitrate:320};
@@ -146,6 +146,23 @@ test('Soulseek registration confirms passwords and displays only verified server
     assert.ok(!f.window.document.body.innerHTML.includes('private-password'));
     f.click('[data-action="soulseek-logout"]');await tick();
     assert.match(f.window.document.querySelector('.account-status').textContent,/Нет входа/);
+    assert.deepEqual(f.errors,[]);
+  } finally {f.close();}
+});
+
+test('Soulseek failure displays code and hint, clears password and preserves manager session', async () => {
+  const f=await fixture(true,{code:'INVALID_PASSWORD',stage:'login',message:'Soulseek отклонил пароль.',hint:'Проверь пароль или выбери свободное имя.'});
+  try {
+    f.click('[data-nav="settings"]');await tick();
+    f.window.document.querySelector('#soulseek-username').value='User';
+    f.window.document.querySelector('#soulseek-password').value='do-not-display-this';
+    f.submit('#soulseek-account-form');await tick();
+    assert.match(f.window.document.querySelector('.account-panel .error-box').textContent,/INVALID_PASSWORD/);
+    assert.match(f.window.document.querySelector('.account-panel .error-box').textContent,/свободное имя/);
+    assert.ok(f.window.document.querySelector('#soulseek-account-form'));
+    assert.ok(!f.window.document.querySelector('#login-form'));
+    assert.equal(f.window.document.querySelector('#soulseek-password').value,'');
+    assert.ok(!f.window.document.body.innerHTML.includes('do-not-display-this'));
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
 });

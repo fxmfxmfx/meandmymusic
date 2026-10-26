@@ -19,12 +19,15 @@ class FakeSlskd:
         self.logged_in = False
         self.reject = False
         self.calls = []
+        self.logs = []
 
     async def admin_token(self):
         return "test-admin-jwt"
 
     async def request(self, method, path, data=None, **kwargs):
         self.calls.append((method, path, data))
+        if path == "/logs/live":
+            return self.logs
         if path == "/options/yaml/location":
             return self.location
         if path == "/options/yaml":
@@ -33,7 +36,7 @@ class FakeSlskd:
             self.config = yaml.safe_load(data)
             return {}
         if path == "/options":
-            return {"soulseek": {"username": self.config["soulseek"]["username"], "password": "*****"}}
+            return {"soulseek": {"username": self.config["soulseek"]["username"], "password": "*****", "connection": self.config["soulseek"].get("connection", {})}}
         if path == "/server":
             if method == "DELETE":
                 self.logged_in = False
@@ -82,7 +85,9 @@ async def test_transport_connected_is_not_success_and_failed_credentials_are_cle
         await account.login("rejected-user", "wrong-password")
     assert error.value.status_code == 504
     assert not account.vault.saved
-    assert account.client.config["soulseek"] == {"username": None, "password": None}
+    assert account.client.config["soulseek"]["username"] is None
+    assert account.client.config["soulseek"]["password"] is None
+    assert account.client.config["soulseek"]["connection"]["proxy"]["password"] is None
     assert not account.restore_enabled
     assert (await account.status())["logged_in"] is False
 
@@ -180,3 +185,32 @@ def test_startup_socket_denial_explains_host_policy(monkeypatch, capsys):
     assert run.main() == 1
     message = capsys.readouterr().err
     assert "socketpair" in message and "AppArmor" in message and "before opening music folders" in message
+
+
+@pytest.mark.asyncio
+async def test_login_reads_only_fresh_failure_logs_and_hides_raw_secrets(account):
+    account.client.logs = [{"timestamp": "old", "context": "slskd.Application", "message": "INVALIDPASS stale-secret"}]
+    account.client.reject = True
+    original = account.client.request
+    async def request(method, path, data=None, **kwargs):
+        result = await original(method, path, data, **kwargs)
+        if method == "PUT" and path == "/server":
+            account.client.logs.append({"timestamp": "new", "context": "slskd.Application", "message": "Login failed: INVALIDPASS current-secret"})
+        return result
+    account.client.request = request
+    with pytest.raises(HTTPException) as error:
+        await account.login("rejected", "password")
+    assert error.value.info["code"] == "INVALID_PASSWORD"
+    status = await account.status()
+    assert status["failure"]["code"] == "INVALID_PASSWORD"
+    assert "current-secret" not in json.dumps(status) and "stale-secret" not in json.dumps(status)
+    assert account.client.config["soulseek"]["password"] is None
+
+
+@pytest.mark.asyncio
+async def test_stale_invalid_password_log_is_not_the_current_login_error(account):
+    account.client.logs = [{"timestamp": "old", "context": "slskd.Application", "message": "INVALIDPASS"}]
+    account.client.reject = True
+    with pytest.raises(HTTPException) as error:
+        await account.login("user", "password")
+    assert error.value.info["code"] == "LOGIN_TIMEOUT"

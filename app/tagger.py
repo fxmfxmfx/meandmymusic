@@ -11,6 +11,7 @@ from beets.library import Item, Library
 
 from app.files import AUDIO, operation_lock, safe_path
 from app.integrations import musicbrainz_lock
+from app.proxy import beets_proxy
 
 PATH_FORMAT = "$albumartist/$year - $album/$disc-$track $title"
 SUMMARY_FIELDS = ("title", "artist", "album", "albumartist", "year", "track", "tracktotal", "disc", "disctotal", "mb_albumid")
@@ -46,7 +47,8 @@ def preview(settings, source, release_id):
         originals[id(item)] = {key: item.get(key) for key in SUMMARY_FIELDS}
     with musicbrainz_lock:
         try:
-            _, _, proposal = autotag.tag_album(items, search_ids=[release_id])
+            with beets_proxy(settings.outbound_proxy):
+                _, _, proposal = autotag.tag_album(items, search_ids=[release_id])
         finally:
             time.sleep(1.1)
     if not proposal.candidates:

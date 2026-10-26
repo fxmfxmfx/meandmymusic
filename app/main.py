@@ -20,6 +20,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from app.config import Settings
 from app.accounts import SoulseekAccount
+from app.errors import ConnectionFailure
 from app.files import AUDIO, audio_metadata, list_directory, move, operation_lock, safe_path
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
@@ -98,9 +99,13 @@ def create_app(settings=None):
                 await restore_task
             worker.shutdown(wait=True)
 
-    app = FastAPI(title="meandmymusic", version="0.2.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.3.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
+
+    @app.exception_handler(ConnectionFailure)
+    async def connection_failure(request, error):
+        return JSONResponse({"detail": error.detail, "error": error.info}, status_code=error.status_code)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, error):
@@ -163,7 +168,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.2.0"}
+        return {"status": "ok", "version": "0.3.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -200,7 +205,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.2.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.3.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -355,7 +360,7 @@ def create_app(settings=None):
     def releases(query: str):
         if len(query.strip()) < 2 or len(query) > 300:
             raise HTTPException(400, "Введите от 2 до 300 символов")
-        return search_releases(query.strip())
+        return search_releases(query.strip(), settings.outbound_proxy)
 
     @app.post("/api/imports/preview")
     def preview_import(data: Preview):

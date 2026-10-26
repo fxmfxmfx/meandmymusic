@@ -16,6 +16,10 @@ services:
       SLSKD_MANAGED_AUTH: "true"
       NAVIDROME_URL: ${NAVIDROME_URL:-}
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      OUTBOUND_PROXY: ${OUTBOUND_PROXY:-}
+      SOULSEEK_LOGIN_TIMEOUT: ${SOULSEEK_LOGIN_TIMEOUT:-45}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ${MUSIC_PATH:-./data/music}:/music
       - ${INBOX_PATH:-./data/inbox}:/inbox
@@ -49,6 +53,8 @@ services:
       - ${MUSIC_PATH:-./data/music}:/music:ro
     tmpfs:
       - /run/slskd:rw,noexec,nosuid,nodev,size=2m,mode=0700,uid=${PUID:-1000},gid=${PGID:-1000}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     security_opt:
       - no-new-privileges:true
     # Sharing is opt-in: set SLSKD_SHARED_DIR=/music to share your archive.
