@@ -303,7 +303,7 @@ document.addEventListener('drop',async event=>{
 });
 document.addEventListener('dragend',()=>{if(state.drag)finishDrag();});
 document.addEventListener('change',event=>{
- if(event.target.matches('[data-theme-picker]')){const value=event.target.value;if(!themes[value])return;document.documentElement.dataset.theme=value;try{localStorage.setItem('mmm-theme',value);}catch{}document.querySelectorAll('[data-theme-picker]').forEach(select=>select.value=value);}
+ if(event.target.matches('[data-theme-picker]')){const value=event.target.value;if(!themes[value])return;applyMusicTheme(value);try{localStorage.setItem('mmm-theme',value);}catch{}document.querySelectorAll('[data-theme-picker]').forEach(select=>select.value=value);}
 });
 document.addEventListener('keydown',event=>{
  if(modal.open||event.target.matches('input,textarea,select'))return;

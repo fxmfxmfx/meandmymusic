@@ -48,7 +48,7 @@ before(async()=>{
 });
 
 beforeEach(async()=>{if(page){await page.keyboard.press('Escape');await page.mouse.up();}});
-afterEach(async(context)=>{if(page){await page.screenshot({path:`artifacts/check-${context.name.split(' ')[0]}.png`,fullPage:true});if(context.name.startsWith('native'))console.log('Native drag events:',JSON.stringify(await page.evaluate(()=>window.dragEvents)));await page.keyboard.press('Escape');}});
+afterEach(async(context)=>{if(page){await page.screenshot({path:`artifacts/check-${context.name.split(' ')[0]}.png`,fullPage:true,animations:'disabled'});if(context.name.startsWith('native'))console.log('Native drag events:',JSON.stringify(await page.evaluate(()=>window.dragEvents)));await page.keyboard.press('Escape');}});
 
 after(async()=>{
  if(browser)await browser.close();
@@ -89,7 +89,7 @@ test('native drag survives breadcrumb navigation and two hover-open folders',asy
   await page.locator('#file-list [data-select="Drag Test/Target/Nested/Track.wav"]').waitFor();
  }catch(error){
   console.log('Drag failure state:',JSON.stringify(await page.evaluate(()=>({path:state.path,drag:state.drag?.path,hover:state.dragHoverKey,timer:state.dragHoverTimer,layer:document.querySelector('#drag-file-list')?.textContent,toast:document.querySelector('#toast').textContent}))));
-  await page.screenshot({path:'artifacts/drag-failure.png',fullPage:true});throw error;
+  await page.screenshot({path:'artifacts/drag-failure.png',fullPage:true,animations:'disabled'});throw error;
  }finally{await page.keyboard.press('Escape');await page.mouse.up();}
  assert.deepEqual(errors,[]);
 });
@@ -123,17 +123,22 @@ test('themes cover desktop, mobile and login without overflow or browser errors'
  await page.locator('[data-nav="library"]').click();
  for(const theme of ['current','light','dark','gruvbox','mocha']){
   await page.locator('[data-theme-picker]').selectOption(theme);
-  await page.screenshot({path:`artifacts/theme-${theme}.png`,fullPage:true});
+  await page.screenshot({path:`artifacts/theme-${theme}.png`,fullPage:true,animations:'disabled'});
+  const contrast=await page.evaluate(()=>{
+   function luminance(value){const rgb=value.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;}
+   return ['.folder-card','.primary'].map(selector=>{const style=getComputedStyle(document.querySelector(selector)),a=luminance(style.color),b=luminance(style.backgroundColor);return {selector,ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};});
+  });
+  for(const item of contrast)assert.ok(item.ratio>=4.5,`${theme} ${item.selector} contrast: ${item.ratio}`);
   assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),theme);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
  await page.reload();await page.locator('[data-select="Drag Test"]').waitFor();
  assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
  await page.setViewportSize({width:390,height:844});
- await page.screenshot({path:'artifacts/mobile.png',fullPage:true});
+ await page.screenshot({path:'artifacts/mobile.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('[data-action="logout"]').click();await page.locator('#login-form').waitFor();
- await page.screenshot({path:'artifacts/login.png',fullPage:true});
+ await page.screenshot({path:'artifacts/login.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
  assert.deepEqual(errors,[]);
 });
