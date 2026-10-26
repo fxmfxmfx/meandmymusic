@@ -87,7 +87,10 @@ test('native drag survives breadcrumb navigation and two hover-open folders',asy
   assert.equal(await exists('music/Drag Test/Source/Track.wav'),false);
   assert.deepEqual(moves[0],{root:'library',source:'Drag Test/Source/Track.wav',destination:'Drag Test/Target/Nested/Track.wav'});
   await page.locator('#file-list [data-select="Drag Test/Target/Nested/Track.wav"]').waitFor();
- }finally{await page.mouse.up();await page.keyboard.press('Escape');}
+ }catch(error){
+  console.log('Drag failure state:',JSON.stringify(await page.evaluate(()=>({path:state.path,drag:state.drag?.path,hover:state.dragHoverKey,timer:state.dragHoverTimer,layer:document.querySelector('#drag-file-list')?.textContent,toast:document.querySelector('#toast').textContent}))));
+  await page.screenshot({path:'artifacts/drag-failure.png',fullPage:true});throw error;
+ }finally{await page.keyboard.press('Escape');await page.mouse.up();}
  assert.deepEqual(errors,[]);
 });
 
@@ -109,7 +112,7 @@ test('permanent deletion confirms the target and deletes nested Inbox contents',
  await page.locator('[data-nav="inbox"]').click();await page.locator('[data-select="Delete Album"]').click();
  await page.locator('[data-action="delete"]').click();
  assert.match(await page.locator('#modal').textContent(),/permanently deleted/);
- await page.locator('[data-action="close-modal"]').click();assert.ok(await exists('inbox/Delete Album/Track.wav'));
+ await page.locator('.modal-footer [data-action="close-modal"]').click();assert.ok(await exists('inbox/Delete Album/Track.wav'));
  await page.locator('[data-action="delete"]').click();await page.locator('[data-action="confirm-delete"]').click();
  await page.locator('#modal').waitFor({state:'hidden'});
  assert.equal(await exists('inbox/Delete Album'),false);

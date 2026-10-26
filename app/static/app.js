@@ -289,7 +289,10 @@ document.addEventListener('dragover',event=>{
 });
 document.addEventListener('dragleave',event=>{
  if(!state.drag)return;const target=event.target.closest('[data-drop-path]');
- if(target&&(!event.relatedTarget||!target.contains(event.relatedTarget)))cancelDragHover();
+ if(!target||target.dataset.dropPath!==state.dragHoverKey)return;
+ const next=document.elementFromPoint?.(event.clientX,event.clientY)?.closest('[data-drop-path]');
+ if(next?.dataset.dropPath===state.dragHoverKey)return;
+ if(!event.relatedTarget||!target.contains(event.relatedTarget))cancelDragHover();
 });
 document.addEventListener('drop',async event=>{
  if(!state.drag)return;const target=event.target.closest('[data-drop-path]');event.preventDefault();
