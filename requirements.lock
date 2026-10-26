@@ -28,3 +28,6 @@ typing-inspection==0.4.2
 Unidecode==1.4.0
 uvicorn==0.34.2
 socksio==1.0.0
+cryptography==46.0.3
+cffi==2.1.1
+pycparser==3.12

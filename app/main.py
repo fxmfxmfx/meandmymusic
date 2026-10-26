@@ -6,17 +6,20 @@ import secrets
 import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
+from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from app.config import Settings
+from app.accounts import SoulseekAccount
 from app.files import AUDIO, audio_metadata, list_directory, move, operation_lock, safe_path
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
@@ -60,11 +63,19 @@ class Preview(BaseModel):
     release_id: UUID
 
 
+class SoulseekCredentials(BaseModel):
+    username: str = Field(min_length=1, max_length=255, repr=False)
+    password: SecretStr = Field(min_length=1, max_length=512)
+    password_confirm: SecretStr | None = None
+    remember: bool = True
+
+
 def create_app(settings=None):
     settings = settings or Settings()
     settings.prepare()
     store = Store(settings.state)
     soulseek = Soulseek(settings)
+    account = SoulseekAccount(settings, soulseek)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beets")
     secret_path = settings.state / "session.key"
     try:
@@ -78,11 +89,25 @@ def create_app(settings=None):
 
     @asynccontextmanager
     async def lifespan(app):
-        yield
-        worker.shutdown(wait=True)
+        restore_task = asyncio.create_task(account.maintain())
+        try:
+            yield
+        finally:
+            restore_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await restore_task
+            worker.shutdown(wait=True)
 
-    app = FastAPI(title="meandmymusic", version="0.1.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.2.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
+    app.state.account = account
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_error(request, error):
+        if request.url.path.startswith("/api/soulseek/auth/"):
+            # FastAPI's default validation errors can echo entire request bodies.
+            return JSONResponse({"detail": "Проверьте поля учётки Soulseek: логин и пароль обязательны, длина пароля — до 512 символов."}, status_code=422)
+        return await request_validation_exception_handler(request, error)
 
     def sign(value):
         return hmac.new(secret, value.encode(), hashlib.sha256).hexdigest()
@@ -138,7 +163,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.1.0"}
+        return {"status": "ok", "version": "0.2.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -175,9 +200,42 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.1.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.2.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
+
+    @app.get("/api/soulseek/auth/status")
+    async def soulseek_status():
+        return await account.status()
+
+    @app.post("/api/soulseek/auth/login")
+    async def soulseek_login(data: SoulseekCredentials):
+        username = data.username.strip()
+        if not username or any(c in username for c in "\r\n\x00"):
+            raise HTTPException(422, "Укажите допустимое имя Soulseek")
+        return await account.login(username, data.password.get_secret_value(), data.remember)
+
+    @app.post("/api/soulseek/auth/register")
+    async def soulseek_register(data: SoulseekCredentials):
+        if data.password_confirm is None or not hmac.compare_digest(data.password.get_secret_value().encode(), data.password_confirm.get_secret_value().encode()):
+            raise HTTPException(422, "Пароли не совпадают")
+        # Soulseek registers an available name through the same login protocol.
+        # The server does not distinguish first registration from an existing account.
+        return await soulseek_login(data)
+
+    @app.post("/api/soulseek/auth/reconnect")
+    async def soulseek_reconnect():
+        return await account.reconnect()
+
+    @app.post("/api/soulseek/auth/logout")
+    async def soulseek_logout():
+        return await account.logout()
+
+    @app.delete("/api/soulseek/auth/saved")
+    async def soulseek_forget():
+        account.restore_enabled = False
+        account.vault.forget()
+        return {"saved": False, "message": "Сохранённая учётка удалена. Для отключения активной сессии используйте «Выйти из Soulseek»."}
 
     @app.get("/api/session")
     def session():

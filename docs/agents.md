@@ -6,6 +6,9 @@ CLI `bin/mmm` использует тот же API, что и веб-интер�
 
 | Команда | Действие |
 | --- | --- |
+| `soulseek-status` | Проверить фактический вход в сеть Soulseek |
+| `soulseek-login` / `soulseek-register` | Ввести учётку и дождаться подтверждения входа; пароль через prompt или `MMM_SOULSEEK_PASSWORD` |
+| `soulseek-logout` / `soulseek-reconnect` | Отключиться и забыть учётку / восстановить сохранённую |
 | `status` | Проверить конфигурацию и доступность API slskd |
 | `ls [PATH] --root library\|inbox` | Получить список файлов и папок |
 | `mkdir PATH --root ...` | Создать папку |

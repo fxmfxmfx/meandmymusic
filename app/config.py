@@ -1,4 +1,5 @@
 import os
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -13,6 +14,9 @@ class Settings:
     slskd_key: str = field(default_factory=lambda: os.getenv("SLSKD_API_KEY", ""))
     navidrome_url: str = field(default_factory=lambda: os.getenv("NAVIDROME_URL", ""))
     secure_cookie: bool = field(default_factory=lambda: os.getenv("COOKIE_SECURE", "false").lower() == "true")
+    slskd_managed_auth: bool = field(default_factory=lambda: os.getenv("SLSKD_MANAGED_AUTH", "false").lower() == "true")
+    slskd_admin_user: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_USER", "archive"))
+    slskd_admin_password: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_PASSWORD", ""))
 
     def prepare(self):
         if len(self.password) < 12:
@@ -22,4 +26,12 @@ class Settings:
             for other in roots[i + 1:]:
                 if path == other or path in other.parents or other in path.parents:
                     raise RuntimeError("MUSIC_DIR, INBOX_DIR and STATE_DIR must be separate, non-nested directories.")
-            path.mkdir(parents=True, exist_ok=True)
+            try:
+                path.mkdir(parents=True, exist_ok=True)
+                with tempfile.TemporaryFile(dir=path, prefix=".mmm-check-"):
+                    pass
+            except OSError as error:
+                name = {self.library: "MUSIC_DIR", self.inbox: "INBOX_DIR", self.state: "STATE_DIR"}[path]
+                raise RuntimeError(f"Cannot write to {name} ({path}). Check bind mount, PUID/PGID and host directory ownership. No chmod/chown was applied to the music archive.") from error
+        if self.slskd_key and not 16 <= len(self.slskd_key) <= 255:
+            raise RuntimeError("SLSKD_API_KEY must be the raw 16–255 character key, without role= or semicolon options.")

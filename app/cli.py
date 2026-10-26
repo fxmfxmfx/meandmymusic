@@ -16,6 +16,14 @@ def parser():
     p.add_argument("--password-env", default="MMM_PASSWORD", help="Name of environment variable containing the server password")
     sub = p.add_subparsers(dest="command", required=True)
     sub.add_parser("status")
+    sub.add_parser("soulseek-status", help="Check actual Soulseek login, independently of API availability")
+    for name in ["soulseek-login", "soulseek-register"]:
+        account = sub.add_parser(name, help="Log in to Soulseek and wait for server confirmation")
+        account.add_argument("--username", help="Soulseek username (prompted if omitted)")
+        account.add_argument("--soulseek-password-env", default="MMM_SOULSEEK_PASSWORD")
+        account.add_argument("--no-save", action="store_true", help="Use only a RAM session; do not persist encrypted credentials")
+    sub.add_parser("soulseek-logout", help="Disconnect Soulseek and forget encrypted credentials")
+    sub.add_parser("soulseek-reconnect", help="Connect using the saved encrypted account")
     ls = sub.add_parser("ls")
     ls.add_argument("path", nargs="?", default="")
     ls.add_argument("--root", choices=["library", "inbox"], default="library")
@@ -83,6 +91,25 @@ def execute(args, client):
     c = args.command
     if c == "status":
         return call("GET", "/system")
+    if c == "soulseek-status":
+        return call("GET", "/soulseek/auth/status")
+    if c in {"soulseek-login", "soulseek-register"}:
+        username = args.username
+        password = os.getenv(args.soulseek_password_env)
+        if sys.stdin.isatty():
+            username = username or input("Soulseek username: ").strip()
+            password = password or getpass.getpass("Soulseek password: ")
+        if not username or not password:
+            raise RuntimeError("Provide a username and Soulseek password through the configured environment variable or interactive prompt")
+        body = {"username": username, "password": password, "remember": not args.no_save}
+        mode = "register" if c == "soulseek-register" else "login"
+        if mode == "register":
+            body["password_confirm"] = getpass.getpass("Confirm Soulseek password: ") if sys.stdin.isatty() else password
+        return call("POST", "/soulseek/auth/" + mode, body)
+    if c == "soulseek-logout":
+        return call("POST", "/soulseek/auth/logout")
+    if c == "soulseek-reconnect":
+        return call("POST", "/soulseek/auth/reconnect")
     if c == "ls":
         return call("GET", "/files", params={"root": args.root, "path": args.path})
     if c == "mkdir":

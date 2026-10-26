@@ -12,18 +12,33 @@ class Soulseek:
     def __init__(self, settings):
         self.settings = settings
 
-    async def request(self, method, path, data=None):
+    async def request(self, method, path, data=None, *, bearer=None, timeout=8):
         if not self.settings.slskd_key:
             raise HTTPException(503, "Укажите SLSKD_URL и SLSKD_API_KEY в настройках сервера")
         try:
-            async with httpx.AsyncClient(timeout=25, follow_redirects=False, trust_env=False) as client:
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False) as client:
                 response = await client.request(method, self.settings.slskd_url + "/api/v0" + path,
-                                                headers={"X-API-Key": self.settings.slskd_key}, json=data)
+                                                headers={"Authorization": "Bearer " + bearer} if bearer else {"X-API-Key": self.settings.slskd_key}, json=data)
             if response.is_error:
                 raise HTTPException(502, f"slskd вернул HTTP {response.status_code}. Проверьте подключение и права API-ключа.")
             return response.json() if response.content else {}
         except (httpx.HTTPError, ValueError) as error:
             raise HTTPException(502, "slskd недоступен или вернул некорректный ответ") from error
+
+    async def admin_token(self):
+        try:
+            async with httpx.AsyncClient(timeout=8, follow_redirects=False, trust_env=False) as client:
+                response = await client.post(self.settings.slskd_url + "/api/v0/session", json={
+                    "username": self.settings.slskd_admin_user,
+                    "password": self.settings.slskd_admin_password or self.settings.password})
+            if response.is_error:
+                raise HTTPException(502, "Не удалось войти в административный API slskd. Проверьте его веб-учётку (не учётку Soulseek).")
+            token = response.json().get("token")
+            if not isinstance(token, str) or not token:
+                raise ValueError
+            return token
+        except (httpx.HTTPError, ValueError, AttributeError):
+            raise HTTPException(502, "Административный API slskd недоступен") from None
 
 
 def search_releases(query):

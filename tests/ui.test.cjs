@@ -24,6 +24,7 @@ async function fixture(authenticated=true) {
     artist:'Test Artist', album:'Test Album', confidence:98, rows:[{source:'Album/01.wav', destination:'Test Artist/2026 - Test Album/1-01 Track.wav',
       before:{title:'Old title', artist:'Unknown'}, after:{title:'Correct title', artist:'Test Artist',album:'Test Album',year:2026,disc:1,track:1,tracktotal:1}}]}};
   let entries = [folder('Artist <script>'), folder('Second Artist'), file('Song.wav')];
+  let account = {managed:true,api_reachable:true,logged_in:false,saved:false,busy:false,error:null};
   window.fetch = async (url, options={}) => {
     const path = new URL(url, window.location.origin);
     const method = options.method || 'GET';
@@ -33,6 +34,9 @@ async function fixture(authenticated=true) {
     if(path.pathname==='/api/session') {result={authenticated};if(!authenticated)status=401;}
     else if(path.pathname==='/api/login') {authenticated=true;result={ok:true};}
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
+    else if(path.pathname==='/api/soulseek/auth/status') result=account;
+    else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Вход подтверждён'};}
+    else if(path.pathname==='/api/soulseek/auth/logout') {account={...account,logged_in:false,username:null,saved:false};result=account;}
     else if(path.pathname==='/api/files') result={path:path.searchParams.get('path')||'.',entries:path.searchParams.get('path')?[]:entries};
     else if(path.pathname==='/api/metadata') result={title:'Song',artist:'Test Artist',duration:61,bitrate:320};
     else if(path.pathname==='/api/folders') {entries.push(folder(body.path));result={ok:true};}
@@ -118,6 +122,30 @@ test('saved preview shows exact destination and apply follows import job to comp
     assert.ok(f.calls.some(c=>c.path===`/api/imports/${planId}/apply`&&c.method==='POST'));
     assert.match(f.window.document.querySelector('#toast').textContent,/Оригиналы сохранены/);
     assert.equal(f.window.document.querySelector('#modal').open,false);
+    assert.deepEqual(f.errors,[]);
+  } finally {f.close();}
+});
+
+test('Soulseek registration confirms passwords and displays only verified server login', async () => {
+  const f=await fixture();
+  try {
+    f.click('[data-nav="settings"]');await tick();
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Нет входа/);
+    f.click('[data-action="soulseek-auth-register"]');
+    f.window.document.querySelector('#soulseek-username').value='New User';
+    f.window.document.querySelector('#soulseek-password').value='private-password';
+    f.window.document.querySelector('#soulseek-confirm').value='different';
+    f.submit('#soulseek-account-form');await tick();
+    assert.match(f.window.document.querySelector('#soulseek-account-error').textContent,/не совпадают/);
+    assert.ok(!f.calls.some(c=>c.path==='/api/soulseek/auth/register'));
+    f.window.document.querySelector('#soulseek-confirm').value='private-password';
+    f.submit('#soulseek-account-form');await tick();
+    const call=f.calls.find(c=>c.path==='/api/soulseek/auth/register');
+    assert.equal(call.body.username,'New User');assert.equal(call.body.remember,true);
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Вход подтверждён/);
+    assert.ok(!f.window.document.body.innerHTML.includes('private-password'));
+    f.click('[data-action="soulseek-logout"]');await tick();
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Нет входа/);
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
 });

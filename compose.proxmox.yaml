@@ -1,0 +1,11 @@
+# Opt-in workaround for hosts whose AppArmor profile denies Unix socketpair.
+# Standard seccomp, capabilities and no-new-privileges remain in place.
+# This relaxes AppArmor only for the two application containers.
+# docker compose -f compose.yaml -f compose.proxmox.yaml up -d --build
+services:
+  manager:
+    security_opt:
+      - apparmor=unconfined
+  slskd:
+    security_opt:
+      - apparmor=unconfined

@@ -1,7 +1,7 @@
 'use strict';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0};
+const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0};
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -44,15 +44,22 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
- clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);if(modal.open)modal.close();
+ clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);if(modal.open)modal.close();
  app.innerHTML=`<main class="login-screen"><section class="login-story">${brand()}<div><div class="vinyl" aria-hidden="true"></div><h1>Твоя музыка.<br><span>Твои правила.</span></h1><p>От первого найденного трека до идеально собранного архива. Всё на своей стороне.</p></div><footer>SELF-HOSTED. SELF-CURATED. ALWAYS YOURS.</footer></section><section class="login-form-wrap"><form class="login-form" id="login-form"><div class="eyebrow">Личный музыкальный архив</div><h2>С возвращением.</h2><p>Твоя коллекция ждёт. Введи пароль, заданный при настройке сервера.</p><label for="password">Пароль</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus placeholder="Пароль от твоего архива"><button class="primary" type="submit">Открыть архив ${icon('arrow')}</button><p class="login-error" id="login-error" role="alert"></p></form></section></main>`;
 }
 function shell(){
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<div class="nav-label">Твоё пространство</div><nav class="nav" aria-label="Основная навигация">${[['library','folder','Архив'],['inbox','inbox','Входящие'],['soulseek','search','Soulseek'],['transfers','download','Загрузки']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}<div class="nav-separator"></div>${[['jobs','jobs','Задания'],['history','history','История'],['settings','settings','Подключения']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><div class="own-your-music">${icon('disc')}<p><strong>Собирай то, что любишь.</strong>Остальное мы поможем разложить по полочкам.</p></div><div class="version"><span>me&my music</span><span>v0.1.0 · alpha</span></div></div></aside><main class="main"><header class="topbar"><div class="topbar-context">Личное пространство <span>/</span> <strong id="context-title">Архив</strong></div><div class="status-group"><span class="status-pill" id="slskd-status"><i class="dot off"></i> slskd</span><span class="status-pill"><i class="dot"></i> beets</span><button class="quiet icon-button" data-action="logout" title="Выйти" aria-label="Выйти">${icon('logout')}</button></div></header><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<div class="nav-label">Твоё пространство</div><nav class="nav" aria-label="Основная навигация">${[['library','folder','Архив'],['inbox','inbox','Входящие'],['soulseek','search','Soulseek'],['transfers','download','Загрузки']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}<div class="nav-separator"></div>${[['jobs','jobs','Задания'],['history','history','История'],['settings','settings','Подключения']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><div class="own-your-music">${icon('disc')}<p><strong>Собирай то, что любишь.</strong>Остальное мы поможем разложить по полочкам.</p></div><div class="version"><span>me&my music</span><span>v0.2.0 · alpha</span></div></div></aside><main class="main"><header class="topbar"><div class="topbar-context">Личное пространство <span>/</span> <strong id="context-title">Архив</strong></div><div class="status-group"><span class="status-pill" id="slskd-status"><i class="dot off"></i> slskd</span><span class="status-pill"><i class="dot"></i> beets</span><button class="quiet icon-button" data-action="logout" title="Выйти" aria-label="Выйти">${icon('logout')}</button></div></header><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{state.system=system;updateStatus();if(state.page==='settings')renderSettings();}).catch(error=>toast(error.message,true));
+ refreshAccount().catch(()=>{});
+ clearInterval(state.accountTimer);state.accountTimer=setInterval(()=>refreshAccount(false).catch(()=>{}),10000);
 }
-function updateStatus(){const el=document.querySelector('#slskd-status');if(el)el.innerHTML=`<i class="dot${state.system?.slskd?'':' off'}"></i> ${state.system?.slskd?'slskd доступен':'slskd не подключён'}`;}
+function updateStatus(){const el=document.querySelector('#slskd-status');if(el)el.innerHTML=`<i class="dot${state.account?.logged_in?'':' off'}"></i> ${state.account?.logged_in?'Soulseek подключён':state.system?.slskd?'Soulseek: нет входа':'slskd недоступен'}`;}
+async function refreshAccount(render=true){
+ if(state.accountBusy)return;
+ state.account=await api('/soulseek/auth/status');updateStatus();
+ if(state.page==='settings'&&(render||!document.querySelector('#soulseek-account-form')?.contains(document.activeElement)))renderAccountPanel();
+}
 function heading(number,title,subtitle,actions=''){return `<section class="page-heading"><div><div class="eyebrow">Твоя коллекция / ${number}</div><h1>${title}</h1><p class="subtitle">${subtitle}</p></div>${actions?`<div class="heading-actions">${actions}</div>`:''}</section>`;}
 async function navigate(page){
  state.generation++;const generation=state.generation;
@@ -193,7 +200,22 @@ async function loadHistory(){
 }
 function renderSettings(){
  const system=state.system;
- document.querySelector('#content').innerHTML=heading('07','Всё играет вместе.','Готовые инструменты, объединённые вокруг твоей коллекции.',`<button data-action="refresh-system">${icon('refresh')}Проверить</button>`)+`<div class="connection-grid"><article class="connection">${icon('search')}<h2>slskd</h2><p>Поиск, пользователи и загрузки из Soulseek. Ключ остаётся на сервере.</p><span class="badge${system?.slskd?'':' warm'}">${system?.slskd?'API доступен':'Нет подключения'}</span><p>Настрой <code>SLSKD_URL</code> и <code>SLSKD_API_KEY</code> в окружении сервера.</p></article><article class="connection">${icon('disc')}<h2>beets + MusicBrainz</h2><p>Сопоставление треков, новые теги и структура папок. Импорт после твоей проверки.</p><span class="badge">beets установлен</span><p>Доступность MusicBrainz проверяется при поиске и сопоставлении.</p></article><article class="connection">${icon('music')}<h2>Navidrome</h2><p>Подключи к нему ту же музыкальную папку. Импортированные альбомы появятся после сканирования.</p><span class="badge${system?.navidrome_url?'':' warm'}">${system?.navidrome_url?'Ссылка настроена':'Можно подключить'}</span>${system?.navidrome_url?`<a href="${esc(system.navidrome_url)}" target="_blank" rel="noreferrer">Открыть Navidrome ↗</a>`:'<p>Укажи <code>NAVIDROME_URL</code> для быстрого перехода.</p>'}</article></div><div class="info-box"><p><strong>Структура импорта</strong><br><code>${esc(system?.path_format||'$albumartist/$year - $album/$disc-$track $title')}</code></p><p><strong>Оригиналы сохраняются.</strong> beets записывает теги в копии. При конфликте имён импорт остановится. Неполные альбомы нужно дополнить или выбрать другое издание.</p><p>Эта версия — однопользовательская alpha. Подключения меняются в конфигурации сервера. Обложки, автоматическое сканирование Navidrome, массовая правка тегов и откат импорта пока не реализованы.</p><p><a href="https://github.com/fxmfxmfx/meandmymusic" target="_blank" rel="noreferrer">Исходный код · AGPL-3.0-only ↗</a></p></div>`;
+ document.querySelector('#content').innerHTML=heading('07','Всё играет вместе.','Учётка Soulseek, состояние сервисов и твоя коллекция.',`<button data-action="refresh-system">${icon('refresh')}Проверить</button>`)+`
+ <section id="soulseek-account" class="account-panel" aria-label="Учётная запись Soulseek"></section>
+ <div class="connection-grid"><article class="connection">${icon('search')}<h2>slskd</h2><p>Поиск, пользователи и загрузки из Soulseek. Доступность API и вход в сеть проверяются отдельно.</p><span class="badge${system?.slskd?'':' warm'}">${system?.slskd?'API доступен':'API недоступен'}</span></article><article class="connection">${icon('disc')}<h2>beets + MusicBrainz</h2><p>Сопоставление треков, новые теги и структура папок. Импорт после твоей проверки.</p><span class="badge">beets установлен</span></article><article class="connection">${icon('music')}<h2>Navidrome</h2><p>Используй ту же музыкальную папку. Альбомы появятся после сканирования.</p>${system?.navidrome_url?`<a href="${esc(system.navidrome_url)}" target="_blank" rel="noreferrer">Открыть Navidrome ↗</a>`:'<p>Быстрая ссылка задаётся через NAVIDROME_URL.</p>'}</article></div><div class="info-box"><p><strong>Структура импорта</strong><br><code>${esc(system?.path_format||'$albumartist/$year - $album/$disc-$track $title')}</code></p><p><strong>Оригиналы сохраняются.</strong> beets записывает теги в копии. При конфликте имён импорт остановится.</p><p>Логи на сервере: <code>docker compose logs -f --tail=100 manager slskd</code>. Если страница недоступна, смотри раздел диагностики в README.</p><p><a href="https://github.com/fxmfxmfx/meandmymusic" target="_blank" rel="noreferrer">Исходный код · AGPL-3.0-only ↗</a></p></div>`;
+ renderAccountPanel();
+}
+function renderAccountPanel(){
+ const el=document.querySelector('#soulseek-account');if(!el)return;
+ const account=state.account;
+ if(!account){el.innerHTML='<div class="loading"><span class="spinner"></span>Проверяем Soulseek…</div>';return;}
+ const online=account.logged_in, register=state.authMode==='register';
+ el.innerHTML=`<div class="section-heading"><h2>Soulseek · твоя учётка</h2><button class="quiet small" data-action="soulseek-refresh">${icon('refresh')}Проверить статус</button></div><div class="account-status"><span class="badge${online?'':' warm'}">${online?'Вход подтверждён':account.busy||account.transitioning?'Подключение…':account.api_reachable?'Нет входа в Soulseek':'slskd недоступен'}</span>${online?`<span>Ты в сети как <strong>${esc(account.username)}</strong></span>`:''}</div>
+ ${account.error?`<div class="error-box">${esc(account.error)}</div>`:''}
+ ${online?`<p class="field-help">${account.saved?'Учётка сохранена зашифрованной. После перезапуска подключимся снова.':'Учётка используется только в памяти. После перезапуска потребуется новый вход.'}</p><div class="account-actions"><button data-action="soulseek-logout">${icon('logout')}Выйти из Soulseek и забыть учётку</button>${account.saved?'<button class="quiet" data-action="soulseek-forget">Удалить сохранённую учётку</button>':''}</div>`:!account.managed?'<p class="field-help">Вход через менеджер требует штатной конфигурации с tmpfs. Обнови Compose или настрой внешний slskd по README.</p>':`
+ <div class="tabbar"><button class="${register?'':'active'}" data-action="soulseek-auth-login">Вход</button><button class="${register?'active':''}" data-action="soulseek-auth-register">Новая учётка</button></div>
+ <p class="field-help">${register?'Soulseek создаёт свободный логин при первом входе. Если имя занято, выбери другое. Отдельная регистрация на сайте не нужна.':'Используй учётку сети Soulseek, например из Nicotine+. Учётка форума Soulseek — отдельная.'}</p>
+ <form id="soulseek-account-form" data-mode="${register?'register':'login'}" class="account-form"><div><label for="soulseek-username">Логин Soulseek</label><input id="soulseek-username" name="username" autocomplete="username" required maxlength="255"></div><div><label for="soulseek-password">Пароль</label><input id="soulseek-password" name="soulseek_password" type="password" autocomplete="${register?'new-password':'current-password'}" required maxlength="512"></div>${register?'<div><label for="soulseek-confirm">Повтори пароль</label><input id="soulseek-confirm" name="password_confirm" type="password" autocomplete="new-password" required maxlength="512"></div>':''}<label class="checkbox-label"><input type="checkbox" name="remember" checked>Сохранить зашифрованно на сервере</label><p class="field-help account-full">Пароль не возвращается в браузер и не сохраняется в .env. Рабочая копия конфига slskd находится в tmpfs. Для удалённого доступа используй HTTPS или VPN.</p><p class="login-error account-full" id="soulseek-account-error" role="status" aria-live="polite"></p><div class="account-actions account-full"><button class="primary" type="submit" ${account.busy?'disabled':''}>${icon('shield')}${register?'Создать / подключить и проверить':'Войти и проверить'}</button>${account.saved?'<button type="button" data-action="soulseek-reconnect">Войти сохранённой учёткой</button><button type="button" class="quiet" data-action="soulseek-forget">Забыть сохранённую</button>':''}</div></form>`}`;
 }
 function playFile(path){
  const entry=state.entries.find(e=>e.path===path);state.player={path,root:root()};
@@ -226,7 +248,12 @@ document.addEventListener('click',async event=>{
   else if(action==='view-grid'||action==='view-list'){state.view=action==='view-grid'?'grid':'list';renderFileList();}
   else if(action==='logout'){await api('/logout',{method:'POST'});showLogin();}
   else if(action==='close-player'){document.querySelector('#player-slot').innerHTML='';state.player=null;}
-  else if(action==='refresh-system'){button.disabled=true;state.system=await api('/system');updateStatus();renderSettings();}
+  else if(action==='refresh-system'){button.disabled=true;state.system=await api('/system');await refreshAccount();updateStatus();renderSettings();}
+  else if(action==='soulseek-auth-login'||action==='soulseek-auth-register'){state.authMode=action.endsWith('register')?'register':'login';renderAccountPanel();}
+  else if(action==='soulseek-refresh'){await refreshAccount();}
+  else if(action==='soulseek-logout'){button.disabled=true;await api('/soulseek/auth/logout',{method:'POST'});await refreshAccount();toast('Сессия Soulseek отключена, сохранённая учётка удалена.');}
+  else if(action==='soulseek-forget'){button.disabled=true;await api('/soulseek/auth/saved',{method:'DELETE'});await refreshAccount();toast('Сохранённая учётка удалена.');}
+  else if(action==='soulseek-reconnect'){button.disabled=true;state.accountBusy=true;try{await api('/soulseek/auth/reconnect',{method:'POST'});}finally{state.accountBusy=false;await refreshAccount();}}
   else if(action==='stop-search'){clearInterval(state.searchTimer);await api(`/soulseek/searches/${state.searchId}`,{method:'DELETE'});state.searchDone=true;renderSoulseek();}
  }catch(error){toast(error.message,true);}finally{if(button.isConnected)button.disabled=false;}
 });
@@ -234,6 +261,13 @@ document.addEventListener('submit',async event=>{
  event.preventDefault();const form=event.target;const values=new FormData(form);const submit=document.querySelector(`[form="${form.id}"]`)||form.querySelector('button[type="submit"]');if(submit)submit.disabled=true;
  try{
   if(form.id==='login-form'){await api('/login',{method:'POST',body:{password:values.get('password')}});shell();}
+  else if(form.id==='soulseek-account-form'){
+   const mode=form.dataset.mode;const body={username:String(values.get('username')).trim(),password:String(values.get('soulseek_password')),remember:values.get('remember')==='on'};
+   if(mode==='register'){body.password_confirm=String(values.get('password_confirm'));if(body.password!==body.password_confirm)throw new Error('Пароли не совпадают');}
+   state.accountBusy=true;document.querySelector('#soulseek-account-error').textContent='Проверяем вход в сеть Soulseek…';
+   try{const result=await api(`/soulseek/auth/${mode}`,{method:'POST',body});if(result.logged_in!==true)throw new Error('Сервер не подтвердил вход');toast(result.message||'Вход в Soulseek подтверждён.');}
+   finally{state.accountBusy=false;form.querySelectorAll('input[type="password"]').forEach(input=>input.value='');await refreshAccount();}
+  }
   else if(form.id==='file-operation'){
    const value=String(values.get('value')).trim(),mode=form.dataset.mode;
    if(!value)throw new Error('Укажи название');
@@ -250,7 +284,7 @@ document.addEventListener('submit',async event=>{
    renderSoulseek();await pollSearch();if(!state.searchDone)state.searchTimer=setInterval(pollSearch,2000);
   }
   else if(form.id==='release-form')await searchReleases(String(values.get('query')).trim());
- }catch(error){if(form.id==='login-form'){const el=document.querySelector('#login-error');if(el)el.textContent=error.message;}else if(form.id==='file-operation'){const el=document.querySelector('#file-operation-error');if(el)el.textContent=error.message;}else toast(error.message,true);}
+ }catch(error){if(form.id==='login-form'){const el=document.querySelector('#login-error');if(el)el.textContent=error.message;}else if(form.id==='soulseek-account-form'){const el=document.querySelector('#soulseek-account-error');if(el)el.textContent=error.message;toast(error.message,true);}else if(form.id==='file-operation'){const el=document.querySelector('#file-operation-error');if(el)el.textContent=error.message;}else toast(error.message,true);}
  finally{if(submit?.isConnected)submit.disabled=false;}
 });
 api('/session').then(shell).catch(()=>showLogin());
