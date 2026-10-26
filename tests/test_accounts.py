@@ -20,6 +20,7 @@ class FakeSlskd:
         self.reject = False
         self.calls = []
         self.logs = []
+        self.server_username = None
 
     async def admin_token(self):
         return "test-admin-jwt"
@@ -45,7 +46,7 @@ class FakeSlskd:
                 self.logged_in = not self.reject
                 return {}
             return {"isConnected": True, "isLoggedIn": self.logged_in, "isTransitioning": False,
-                    "username": self.config["soulseek"]["username"], "password": "must-not-be-forwarded"}
+                    "username": self.server_username, "password": "must-not-be-forwarded"}
         raise AssertionError(f"Unexpected upstream route: {method} {path}")
 
 
@@ -76,6 +77,26 @@ async def test_confirmed_login_encrypts_both_credentials_and_preserves_config(ac
         assert b"private-username" not in file.read_bytes()
     assert os.stat(account.vault.path).st_mode & 0o777 == 0o600
     assert os.stat(settings.state / "vault.salt").st_mode & 0o777 == 0o600
+
+
+@pytest.mark.asyncio
+async def test_explicit_different_logged_in_username_is_not_accepted(account):
+    account.client.server_username = "another-user"
+    with pytest.raises(HTTPException) as error:
+        await account.login("requested-user", "requested-password")
+    assert error.value.status_code == 504
+    assert not account.vault.saved
+
+
+@pytest.mark.asyncio
+async def test_missing_server_username_uses_options_only_after_confirmed_login(account):
+    account.client.config["soulseek"]["username"] = "configured-user"
+    raw = await account.server_status()
+    assert raw["isLoggedIn"] is False
+    assert not any(path == "/options" for _, path, _ in account.client.calls)
+    account.client.logged_in = True
+    raw = await account.server_status()
+    assert raw["username"] == "configured-user"
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,18 @@ class SoulseekAccount:
         self.restore_enabled = self.vault.saved
         self.poll_seconds = settings.soulseek_login_timeout
 
+    async def server_status(self):
+        raw = await self.client.request("GET", "/server", timeout=3)
+        if raw.get("isLoggedIn") is True and not raw.get("username"):
+            # slskd 0.26.2 declares ServerState.Username but never populates it:
+            # Application.Client_StateChanged writes the name to State.User.
+            # The REST endpoint exposes only State.Server. After a confirmed
+            # network login, use the current configured account (configure()
+            # disconnects the previous session before changing credentials).
+            options = await self.client.request("GET", "/options", timeout=3)
+            raw = {**raw, "username": options.get("soulseek", {}).get("username")}
+        return raw
+
     async def status(self):
         result = {"managed": self.settings.slskd_managed_auth, "api_reachable": False, "connected": False,
                   "logged_in": False, "transitioning": False, "username": None, "saved": self.vault.saved,
@@ -35,7 +47,7 @@ class SoulseekAccount:
         if not self.settings.slskd_key:
             return result
         try:
-            raw = await self.client.request("GET", "/server", timeout=3)
+            raw = await self.server_status()
             result.update(api_reachable=True, connected=raw.get("isConnected") is True,
                           logged_in=raw.get("isLoggedIn") is True, transitioning=raw.get("isTransitioning") is True,
                           username=raw.get("username") if raw.get("isLoggedIn") is True else None)
@@ -138,7 +150,7 @@ class SoulseekAccount:
                 await self.client.request("PUT", "/server")
                 deadline = time.monotonic() + self.poll_seconds
                 while time.monotonic() < deadline:
-                    raw = await self.client.request("GET", "/server", timeout=3)
+                    raw = await self.server_status()
                     if raw.get("isLoggedIn") is True and raw.get("username") == username:
                         if remember:
                             self.vault.save(username, password)
