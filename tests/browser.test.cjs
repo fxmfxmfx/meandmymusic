@@ -1,4 +1,4 @@
-const {test,before,after}=require('node:test');
+const {test,before,after,beforeEach,afterEach}=require('node:test');
 const assert=require('node:assert/strict');
 const fs=require('node:fs/promises');
 const path=require('node:path');
@@ -31,12 +31,24 @@ before(async()=>{
  assert.ok(ready,'Disposable application failed to start: '+serverLog);
  browser=await chromium.launch({headless:true,args:['--no-sandbox']});
  page=await browser.newPage({viewport:{width:1440,height:1000}});
+ page.setDefaultTimeout(10000);
+ await page.addInitScript(()=>{
+  window.dragEvents=[];
+  for(const name of ['dragstart','dragover','dragleave','dragend','drop'])document.addEventListener(name,event=>{
+   if(name==='dragover'&&window.dragEvents.at(-1)?.target===event.target.closest('[data-drop-path]')?.dataset.dropPath)return;
+   window.dragEvents.push({type:name,target:event.target.closest('[data-drop-path]')?.dataset.dropPath,source:event.target.closest('[data-select]')?.dataset.select});
+   if(window.dragEvents.length>80)window.dragEvents.shift();
+  });
+ });
  page.on('pageerror',error=>errors.push(error.message));
  page.on('request',request=>{if(request.url().endsWith('/api/move')&&request.method()==='POST')moves.push(request.postDataJSON());});
  await page.goto(url);await page.locator('#password').fill(password);await page.locator('#login-form button').click();
  await page.locator('[data-select="Drag Test"]').waitFor();
  await fs.mkdir('artifacts',{recursive:true});
 });
+
+beforeEach(async()=>{if(page){await page.keyboard.press('Escape');await page.mouse.up();}});
+afterEach(async(context)=>{if(page){await page.screenshot({path:`artifacts/check-${context.name.split(' ')[0]}.png`,fullPage:true});if(context.name.startsWith('native'))console.log('Native drag events:',JSON.stringify(await page.evaluate(()=>window.dragEvents)));await page.keyboard.press('Escape');}});
 
 after(async()=>{
  if(browser)await browser.close();
@@ -86,7 +98,7 @@ test('folder dragging and graphical picker perform actual filesystem moves',asyn
  await page.locator('[data-select="Drag Test/Target"]').dblclick();
  await page.locator('[data-select="Drag Test/Target/Source"]').click();
  await page.locator('[data-action="move"]').click();
- await page.locator('[data-picker-path="Drag Test"]').click();
+ await page.locator('.picker-breadcrumbs [data-picker-path="Drag Test"]').click();
  await page.locator('[data-action="confirm-move"]').click();
  await waitForFile('music/Drag Test/Source');
  assert.equal(await exists('music/Drag Test/Target/Source'),false);
