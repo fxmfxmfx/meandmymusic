@@ -7,6 +7,7 @@ data/
 node_modules/
 test-results/
 playwright-report/
+artifacts/
 pytest-of-root/
 /pip-*/
 /tmp*

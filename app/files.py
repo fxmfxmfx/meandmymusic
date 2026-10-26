@@ -2,6 +2,7 @@ import os
 import ctypes
 import errno
 import threading
+import shutil
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -15,7 +16,7 @@ def rename_noreplace(source, destination):
     """Linux exclusive rename: protect even against a concurrent external writer."""
     libc = ctypes.CDLL(None, use_errno=True)
     if not hasattr(libc, "renameat2"):
-        raise OSError(errno.ENOTSUP, "Для перемещений требуется Linux с поддержкой renameat2")
+        raise OSError(errno.ENOTSUP, "Moving files requires Linux with renameat2 support")
     rename = libc.renameat2
     rename.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     rename.restype = ctypes.c_int
@@ -27,19 +28,19 @@ def rename_noreplace(source, destination):
 def safe_path(root: Path, relative: str, *, exists=True, allow_root=True) -> Path:
     raw = Path(relative)
     if raw.is_absolute() or ".." in raw.parts or "\x00" in relative or "\\" in relative:
-        raise HTTPException(400, "Недопустимый путь")
+        raise HTTPException(400, "Invalid path")
     current = root
     for part in raw.parts:
         current = current / part
         if current.is_symlink():
-            raise HTTPException(400, "Символические ссылки не поддерживаются")
+            raise HTTPException(400, "Symbolic links are not supported")
     target = current.resolve()
     if not target.is_relative_to(root):
-        raise HTTPException(400, "Путь за пределами музыкальной папки")
+        raise HTTPException(400, "Path is outside the music folder")
     if not allow_root and target == root:
-        raise HTTPException(400, "Нельзя изменять корневую папку")
+        raise HTTPException(400, "The root folder cannot be modified")
     if exists and not target.exists():
-        raise HTTPException(404, "Файл или папка не найдены")
+        raise HTTPException(404, "File or folder not found")
     return target
 
 
@@ -62,7 +63,7 @@ def audio_metadata(path: Path):
 def list_directory(root: Path, relative: str):
     directory = safe_path(root, relative)
     if not directory.is_dir():
-        raise HTTPException(400, "Выберите папку")
+        raise HTTPException(400, "Select a folder")
     entries = []
     for path in directory.iterdir():
         if path.is_symlink() or path.name.startswith("."):
@@ -83,15 +84,31 @@ def move(root: Path, source: str, destination: str):
         src = safe_path(root, source, allow_root=False)
         dst = safe_path(root, destination, exists=False, allow_root=False)
         if dst.exists():
-            raise HTTPException(409, "Такой файл или папка уже существует")
+            raise HTTPException(409, "A file or folder with this name already exists")
         if not dst.parent.is_dir():
-            raise HTTPException(400, "Папка назначения не существует")
+            raise HTTPException(400, "Destination folder does not exist")
         if src.is_dir() and dst.is_relative_to(src):
-            raise HTTPException(400, "Нельзя переместить папку внутрь неё самой")
+            raise HTTPException(400, "A folder cannot be moved inside itself")
         try:
             rename_noreplace(src, dst)
         except FileExistsError:
-            raise HTTPException(409, "Файл назначения уже существует. Ничего не перезаписано.")
+            raise HTTPException(409, "Destination already exists. No files were overwritten.")
         except OSError as error:
-            raise HTTPException(400, f"Перемещение не выполнено: {error.strerror}") from error
+            raise HTTPException(400, f"Move failed: {error.strerror}") from error
         return {"source": source, "destination": destination}
+
+
+def delete(root: Path, relative: str):
+    with operation_lock:
+        target = safe_path(root, relative, allow_root=False)
+        try:
+            if target.is_dir():
+                # rmtree unlinks nested symlinks; it never follows them outside.
+                shutil.rmtree(target)
+            else:
+                target.unlink()
+        except PermissionError:
+            raise HTTPException(403, "Permission denied: cannot delete this item") from None
+        except OSError:
+            raise HTTPException(409, "Could not completely delete this item. Refresh the folder and check permissions.") from None
+        return {"path": relative}

@@ -39,7 +39,7 @@ class CredentialVault:
                 raise ValueError
             return value
         except (InvalidToken, ValueError, KeyError):
-            raise ValueError("Не удалось расшифровать учётку Soulseek. Возможно, изменился APP_PASSWORD. Удали сохранённую учётку и войди заново.") from None
+            raise ValueError("Could not decrypt the saved Soulseek account. APP_PASSWORD may have changed. Remove the saved account and sign in again.") from None
 
     def save(self, username, password):
         token = self.fernet.encrypt(json.dumps({"username": username, "password": password}).encode())

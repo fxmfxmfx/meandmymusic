@@ -24,6 +24,16 @@ jobs:
       - run: python -m pytest -q
       - run: node --check app/static/app.js
       - run: npm ci && npm test
+      - name: Install browser for interaction tests
+        run: npx playwright install --with-deps chromium --only-shell
+      - name: Verify native drag, file operations and themes in Chromium
+        run: npm run test:browser
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: interface-screenshots
+          path: artifacts/*.png
+          if-no-files-found: ignore
       - run: docker compose --env-file .env.example config --quiet
       - run: docker compose --env-file .env.example -f compose.yaml -f compose.proxmox.yaml config --quiet
       - name: Start actual Compose stack

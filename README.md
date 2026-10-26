@@ -1,276 +1,251 @@
 # me&my music
 
-**Твоя музыка. Твои правила.**
+A music library manager combining file browsing, Soulseek downloads and album
+matching with MusicBrainz/beets. Use the same Library directory with Navidrome or
+another music server.
 
-Однопользовательский self-hosted менеджер музыкального архива. Файловый менеджер, Soulseek, MusicBrainz и beets в одном окне. Музыка сразу скачивается на сервер, где лежит коллекция: без промежуточного десктопа и ручного переноса по SSH.
+## Features
 
-Первая рабочая **alpha**, не готовая замена всем возможностям Picard. Основной сценарий: **найти → скачать во входящие → выбрать издание → проверить теги и пути → скопировать в архив → слушать в Navidrome**.
+- Browse Library and Inbox, filter files, inspect tags and play supported audio.
+- Create folders, rename, move and delete files or whole folders in either section.
+- Drag items onto folders or breadcrumbs. Hold over a destination for 650 ms to
+  open it without releasing the drag; continue browsing, then drop in the desired
+  folder. The Move button provides a graphical folder picker as an alternative.
+- Review operation history; undo moves, renames and creation of empty folders.
+  Deletion is permanent and requires confirmation.
+- Choose Original, Light, Dark, Gruvbox or Catppuccin Mocha. Theme selection is
+  remembered in the browser and applies to the login screen too.
+- Search Soulseek, queue remote files and monitor downloads on the server.
+- Register or sign in to Soulseek and verify actual network login.
+- Match Inbox albums using embedded metadata, track names, durations and track
+  counts through beets. Review ranked editions, missing/extra tracks and proposed
+  tags before importing. Correct the artist/album or enter an exact release MBID.
+- Import copies into Library, with a beets catalog and a JSON CLI for automation.
 
-## Что работает
+This is an early release. Metadata matching is not audio fingerprint recognition.
+Artwork and non-audio files are not copied automatically. Moves stay within the
+selected Library or Inbox root. Import is the workflow from Inbox to Library.
 
-- Просмотр папок и файлов в архиве и во входящих, фильтр, свойства аудиофайлов и прослушивание в браузере.
-- Создание папок, переименование и перемещение внутри выбранного раздела. История и отмена этих операций.
-- Поиск Soulseek через API slskd, результаты по пользователю и папке, скачивание папки или отдельных файлов, очередь и отмена загрузок.
-- Поиск изданий MusicBrainz и выбор точного release MBID.
-- Настоящее сопоставление треков движком beets. Предпросмотр тегов и **точных** путей назначения без записи в музыку или основной каталог beets.
-- Импорт после проверки: SHA-256 исходников, подготовка копий, запись тегов через beets и публикация без перезаписи существующих файлов. Оригиналы остаются во входящих.
-- Фоновые задания и журнал в SQLite. Каталог beets обновляет пути после перемещения через менеджер.
-- CLI с JSON-ответами поверх того же API. Подходит для работы через ИИ-агента.
-- Пароль, сессионная HttpOnly cookie, защита запросов изменения, проверка путей и запрет символических ссылок.
+## Quick start
 
-## Запуск на хомлабе
+Requires Docker Engine with Docker Compose v2 and Python 3.
 
-Нужны Docker с Compose v2, Python 3 для начальной настройки и учётная запись Soulseek.
-
-```bash
+```sh
 git clone https://github.com/fxmfxmfx/meandmymusic.git
 cd meandmymusic
 python3 scripts/setup.py
+```
+
+Edit `.env`. Set `MUSIC_PATH` to the existing music directory, then choose separate
+paths for Inbox and application state. None of these directories may be nested
+inside another. For example:
+
+```dotenv
+MUSIC_PATH=/srv/music
+INBOX_PATH=/srv/music-inbox
+STATE_PATH=/srv/meandmymusic/state
+SLSKD_STATE_PATH=/srv/meandmymusic/slskd
+PUID=1000
+PGID=1000
+APP_BIND=127.0.0.1
+APP_PORT=8080
+NAVIDROME_URL=https://music.example.com
+```
+
+Use the UID/GID that can read and write these host directories. The setup script
+creates a new `.env` with a generated `APP_PASSWORD` and raw `SLSKD_API_KEY`; it
+refuses to overwrite an existing configuration. It does not change ownership of
+an existing music archive. Preserve the generated passwords when editing paths.
+
+```sh
 docker compose up -d --build
 ```
 
-Открой **http://localhost:8080**. Пароль менеджера сгенерирован в `.env`, поле `APP_PASSWORD`. Скрипт генерирует пароль менеджера, API-ключ и создаёт директории. Учётку Soulseek вводишь после входа в менеджер: «Подключения → Soulseek». Существующий `.env` он не перезаписывает. GitHub-токен приложению не нужен.
+Open `http://localhost:8080` and sign in using `APP_PASSWORD` from `.env`. Change
+`APP_BIND` to a reachable host address for LAN access. Use HTTPS or VPN for remote
+access. Keep `.env` private; never publish it or include it in bug reports.
 
-Без Python можно скопировать `.env.example` в `.env`, заполнить значения и самостоятельно создать директории с правами записи для `PUID:PGID`, включая `data/slskd/incomplete`. `PUID` и `PGID` должны совпадать с владельцем подключённых директорий. Само приложение не делает `chmod` и `chown` существующего архива.
+## Soulseek
 
-По умолчанию веб-интерфейсы привязаны к loopback. Для доступа из LAN/VPN задай `APP_BIND=0.0.0.0` и настрой сетевой доступ. При использовании HTTPS reverse proxy задай `COOKIE_SECURE=true`. Порт Soulseek `50300/TCP` пробрасывается отдельно; для входящих соединений может потребоваться настройка роутера. Шаринг архива в Soulseek по умолчанию выключен; его можно включить в Compose переменной `SLSKD_SHARED_DIR=/music`.
+Open **Settings → Soulseek**, sign in with a Soulseek network account, or choose
+**Create account** and an available username. A forum account is different.
+Registration and login use the same Soulseek protocol. The manager waits for
+slskd to report `isLoggedIn: true`; reaching the API or TCP port is insufficient.
+The slskd 0.26.2 `/server.username` field is unused, so the manager obtains the
+active name from `/options` after network login is confirmed.
 
-slskd запускается отдельным контейнером. Его собственный интерфейс доступен на http://localhost:5030, пользователь `archive`, пароль — `APP_PASSWORD`.
+**Remember account** stores the account encrypted in the state directory and
+reconnects after a slskd restart. The encryption key depends on `APP_PASSWORD`;
+changing it requires signing in again. Soulseek credentials are entered in the UI,
+not in `.env`. The working slskd YAML and its backup live on tmpfs and are cleared
+on logout. The slskd administrative web account is separate from Soulseek:
+Compose uses username `archive` and `APP_PASSWORD`.
 
-### Обновление с первой alpha
+Sharing is opt-in. To share the mounted Library, add `SLSKD_SHARED_DIR: /music`
+to the slskd environment in Compose. Soulseek peer connectivity may require
+forwarding `SOULSEEK_PORT` (default 50300). Do not expose slskd's administrative
+port 5030 publicly.
 
-```bash
-git pull --ff-only
-python3 scripts/upgrade.py --lan
-docker compose up -d --build
-```
+### Shared SOCKS5 proxy
 
-Скрипт удаляет старые `SOULSEEK_USERNAME`/`SOULSEEK_PASSWORD` из `.env`, сохраняет `APP_PASSWORD` и `SLSKD_API_KEY`, выставляет права `.env` в `0600`. Резервную копию с открытыми паролями он не создаёт. Флаг `--lan` задаёт `APP_BIND=0.0.0.0`: страницу можно открыть с другого компьютера по `http://IP_СЕРВЕРА:8080`. Для локального reverse proxy можно обновиться без `--lan`.
-
-Учётку Soulseek введи заново через интерфейс. Если раньше ты вручную вписывал её в постоянный `/app/slskd.yml` или его `.bak`, удали оттуда эти значения тоже. Новый штатный Compose использует другой конфиг — в tmpfs.
-
-### Вход и создание учётки Soulseek
-
-В «Подключения → Soulseek» доступны вкладки «Вход» и «Новая учётка». В Soulseek свободное имя регистрируется первым успешным входом; отдельной регистрации на сайте нет. Сервер не сообщает, создана ли новая учётка или использована существующая, поэтому интерфейс подтверждает именно **вход в сеть**, а не факт нового аккаунта. Пароль новой учётки нужно повторить. Если имя занято или вход не подтверждён, выбери другое имя либо проверь существующий пароль и сеть.
-
-Доступный API slskd **не считается** успешной авторизацией: менеджер ждёт `isLoggedIn=true` и проверяет имя вошедшей учётки. Есть обновление статуса, вход сохранённой учёткой, выход с отключением от сети и удаление сохранённых данных.
-
-- «Сохранить зашифрованно» хранит **и логин, и пароль** в `STATE_PATH/soulseek.enc` с правами `0600`. Используется Fernet; ключ выводится через scrypt из `APP_PASSWORD` и случайной соли `vault.salt`.
-- Пароль не возвращается из API, не записывается в историю, не помещается в `.env` и не сохраняется в localStorage браузера. Ошибки валидации учётки не возвращают введённые значения.
-- slskd 0.26.2 принимает изменение учётки только через YAML. Поэтому его рабочий `/run/slskd/slskd.yml` и `.bak` размещены на **tmpfs**. Менеджер откажется писать учётку в постоянный конфиг `/app/slskd.yml`.
-- Без галочки учётка остаётся только в текущем процессе и временном конфиге; после перезапуска нужен новый вход. С галочкой менеджер восстанавливает вход после перезапуска slskd.
-- Выход удаляет зашифрованную учётку, отключает сеть и очищает поля временного YAML и его резервной копии. Кнопка «Удалить сохранённую учётку» удаляет сохранение, сохраняя текущую сетевую сессию.
-
-Шифрование не защищает от администратора хоста, который читает память контейнеров или имеет одновременно `APP_PASSWORD` и файлы состояния. При смене `APP_PASSWORD` сохранённую учётку понадобится удалить и ввести заново. Не публикуй `.env`, файлы состояния и полный `docker compose config`. Для передачи пароля с другого компьютера используй HTTPS или доверенный VPN. Имя активной учётки показывается владельцу в интерфейсе и может присутствовать в логах самого slskd.
-
-### Общий SOCKS5-прокси
-
-В `.env` можно заранее задать один исходящий прокси:
+A proxy is optional. To use an existing SOCKS5 proxy for Soulseek and MusicBrainz:
 
 ```dotenv
 OUTBOUND_PROXY=socks5://proxy.example.com:1080
 SOULSEEK_LOGIN_TIMEOUT=45
 ```
 
-С авторизацией:
+With authentication:
 
 ```dotenv
 OUTBOUND_PROXY='socks5://USER:PASSWORD@proxy.example.com:1080'
 ```
 
-Спецсимволы в USER/PASSWORD нужно percent-encode: `@` → `%40`, `:` → `%3A`, `$` → `%24`. Поддерживаются `socks5://` и `socks5h://`. HTTP/HTTPS-прокси не поддерживаются как общий прокси: Soulseek нужен SOCKS5 TCP CONNECT. Пустое значение означает прямое подключение.
+Percent-encode special characters in credentials, such as `@` as `%40`, `:` as
+`%3A` and `$` as `%24`. HTTP/HTTPS proxies cannot carry the shared Soulseek route.
+Leave `OUTBOUND_PROXY=` empty for direct connections. Internal requests to slskd
+always bypass this proxy.
 
-Одна переменная применяется к исходящим подключениям Soulseek, поиску MusicBrainz и сопоставлению через beets. Внутренние запросы менеджера к API slskd остаются прямыми. Для beets используется отдельный транспорт musicbrainzngs; глобальный `socket.socket` не подменяется. Шифрование TLS проверяется штатно.
+For a proxy on the Docker host, use `host.docker.internal`. The proxy must listen
+on an interface reachable from the Docker bridge; a host-only `127.0.0.1` listener
+is not sufficient. A proxy on another machine requires that machine's address.
+The setting connects to a proxy; it does not install or start one.
 
-Если прокси работает **на самом PVE**, укажи `host.docker.internal`, например `socks5://host.docker.internal:1080`: `localhost` внутри контейнера указывает на контейнер. Прокси должен слушать адрес, доступный из Docker bridge; одного `127.0.0.1` на хосте недостаточно. Для обоих контейнеров добавлено имя `host.docker.internal` → host gateway.
+After changing `.env`, recreate the stack and sign in or reconnect:
 
-После изменения `.env` пересоздай контейнеры той же командой Compose, с которой запускаешь стек. Для твоего PVE:
-
-```bash
-docker compose -f compose.yaml -f compose.proxmox.yaml up -d --build --force-recreate
+```sh
+docker compose up -d --build --force-recreate
 ```
 
-Затем заново войди в Soulseek или нажми «Войти сохранённой учёткой»: прокси slskd записывается во временный YAML при подключении. Логин/пароль прокси не возвращаются в интерфейс и не записываются в постоянный конфиг slskd; сам URL в `.env` защищён правами файла. `.env` нельзя публиковать.
+The manager checks SOCKS5 negotiation, optional proxy authentication and CONNECT
+to Soulseek before attempting account login. Successful preflight does not mean
+successful Soulseek login.
 
-Перед сетевым входом проверяем SOCKS5-подключение, авторизацию прокси и TCP-маршрут до фактического сервера Soulseek. Проверка не отправляет логин/пароль Soulseek. Успешная проверка маршрута не считается успешным входом: всё равно ждём `isLoggedIn=true`.
+### Existing slskd instance
 
-### Понятные ошибки входа
+Point the manager's `SLSKD_URL` to the existing service and supply its raw
+`SLSKD_API_KEY` with the Administrator role. Disable `SLSKD_MANAGED_AUTH` to keep
+credentials managed by the external instance. To manage login through this UI,
+use `/run/slskd/slskd.yml` on tmpfs, enable remote configuration, and configure
+`SLSKD_MANAGED_AUTH=true`, `SLSKD_ADMIN_USER` and `SLSKD_ADMIN_PASSWORD` on the
+manager. Mount the same physical download directory as `/inbox`. Remove the
+bundled slskd service and its `depends_on` if they are unnecessary.
 
-Ошибка содержит читаемое описание, этап, стабильный код и подсказку. Страница не выбрасывает из менеджера при неверном Soulseek-пароле.
+## Match and import an album
 
-| Код | Что проверять |
-| --- | --- |
-| `INVALID_PASSWORD` | Пароль существующей учётки; для новой учётки имя может быть занято |
-| `INVALID_USERNAME` | Допустимое имя Soulseek |
-| `LOGGED_IN_ELSEWHERE` | Другой клиент с той же учёткой |
-| `SLSKD_ADMIN_AUTH_FAILED` | Веб-учётку slskd / APP_PASSWORD, отдельно от Soulseek |
-| `SLSKD_HTTP_401` / `SLSKD_HTTP_403` | Соответствие API-ключа и его административную роль |
-| `DNS_FAILED` | DNS/маршрутизацию сервера |
-| `PROXY_AUTH_FAILED` | Учётку самого SOCKS5-прокси |
-| `PROXY_REFUSED` / `PROXY_DNS_FAILED` / `PROXY_TIMEOUT` | Доступ к адресу и порту прокси из Docker |
-| `PROXY_TARGET_UNREACHABLE` | Прокси доступен, но CONNECT до Soulseek отклонён |
-| `LOGIN_TIMEOUT` | Сервер не подтвердил вход и не сообщил распознаваемую причину |
+1. Download a complete album from Soulseek. Wait for every track to finish.
+2. In Inbox, select the album folder and choose **Match album**.
+3. Matching reads embedded tags and compares tracks through beets. Review the
+   suggested artist/album. If tags are missing, the folder name is a fallback;
+   fill in the artist and album to improve the search.
+4. Compare edition, date, medium, track count and match score. A percentage ranks
+   candidates; it does not guarantee that a particular pressing is correct.
+5. Choose **Preview**, inspect each track's old/new tags and destination path,
+   then choose **Import album**. Progress remains available in Tasks.
 
-Для отказов Soulseek анализируются **новые** записи буфера `/logs/live` текущей попытки. Сырые логи и их содержимое не возвращаются в браузер: наружу попадает только распознанный код и заранее заданное объяснение. Старый `INVALIDPASS` из предыдущей попытки не считается текущей ошибкой. Если причина не определена, показывается честный таймаут, без утверждения о региональной блокировке. Лимит ожидания настраивается через `SOULSEEK_LOGIN_TIMEOUT` (5–120 секунд, по умолчанию 45).
+An exact MusicBrainz release MBID or release URL can be entered instead of search.
+Incomplete albums, duplicate targets and existing destination files block import.
+Previews expire after one hour and fingerprint source files. Changed source files
+require a new preview. Original files remain in Inbox; delete them separately
+when no longer needed.
 
-### Подключить существующий Navidrome
-
-В `.env` укажи абсолютный путь к своей музыкальной директории:
-
-```dotenv
-MUSIC_PATH=/srv/music
-NAVIDROME_URL=https://music.example.com
-```
-
-Именно эта директория должна быть подключена к Navidrome как его music folder. Входящие, состояние приложения и состояние slskd должны лежать **за пределами** музыкальной папки. После импорта альбом появится в Navidrome при следующем сканировании; автоматический запуск сканирования пока не реализован.
-
-### Использовать уже работающий slskd
-
-В окружении сервиса `manager` замени `SLSKD_URL` на адрес существующего сервера и `SLSKD_API_KEY` на его сырой ключ с ролью `Administrator` для проверки состояния и управления подключением. Для внешнего slskd по умолчанию выключи `SLSKD_MANAGED_AUTH`: его уже настроенная учётка продолжит работать, а статус входа будет виден. Чтобы включить ввод учётки через менеджер, внешний slskd должен использовать тот же `/run/slskd/slskd.yml` на tmpfs с включённым `SLSKD_REMOTE_CONFIGURATION`; передай менеджеру `SLSKD_MANAGED_AUTH=true`, `SLSKD_ADMIN_USER` и `SLSKD_ADMIN_PASSWORD` от веб-интерфейса slskd (это отдельная учётка). Убери `depends_on` и отдельный сервис `slskd`, если он не нужен. Менеджер должен видеть **ту же физическую папку**, в которую slskd сохраняет завершённые загрузки, как `/inbox`. Адрес `localhost` внутри контейнера указывает на сам контейнер.
-
-## Как импортировать альбом
-
-1. Найди релиз в Soulseek и поставь выбранную папку в очередь.
-2. Дождись завершения **всех** треков в разделе «Загрузки». В этой версии автоматической проверки завершения всей загрузки нет.
-3. Во «Входящих» выбери папку одного альбома и нажми «Подобрать релиз».
-4. Найди издание MusicBrainz или вставь его release MBID. Проверь число треков, носитель, страну и дату.
-5. Нажми «Проверить». beets сопоставит треки и покажет прежние/новые теги и будущие пути.
-6. Проверь сопоставление и нажми «Применить и скопировать». Можно закрыть окно: результат останется в «Заданиях».
-
-Формат путей первой версии:
+The current import layout is:
 
 ```text
-Исполнитель альбома/Год - Альбом/Диск-Номер Название.ext
+Album Artist/Year - Album/Disc-Track Title.ext
 ```
 
-beets обрабатывает допустимые имена и Unicode. Неполное сопоставление, повторные пути и существующие файлы назначения блокируют импорт. Предпросмотр действует час. Не изменяй папку альбома внешними программами во время импорта.
+Navidrome sees imports on its next scan. Automatic scan triggering is not included.
 
-## CLI и ИИ-агенты
+## CLI and API
 
-CLI устанавливается из того же checkout; для него нужны Python 3.12+ и `httpx`:
+See [docs/agents.md](docs/agents.md) for commands and a download/import workflow.
+Contributors and coding agents should read [AGENTS.md](AGENTS.md).
 
-```bash
+The CLI uses the same authenticated API as the UI:
+
+```sh
 python3 -m venv .venv
-.venv/bin/pip install -r requirements.lock
+.venv/bin/python -m pip install -r requirements.lock
 export MMM_URL=http://localhost:8080
-export MMM_PASSWORD='пароль менеджера из APP_PASSWORD'
-
+# Set MMM_PASSWORD using the shell or a secret manager.
 bin/mmm status
-bin/mmm soulseek-status
-bin/mmm soulseek-login  # интерактивно запрашивает учётку Soulseek
 bin/mmm ls --root inbox
-bin/mmm search 'artist album' --wait 20
-bin/mmm downloads
-bin/mmm releases 'release:album AND artist:artist'
-bin/mmm preview 'папка/альбома' --release RELEASE_UUID --wait
-bin/mmm apply PLAN_UUID --wait
-bin/mmm jobs
 ```
 
-Все результаты — JSON в stdout; ошибки — JSON в stderr и ненулевой exit code. Пароль CLI не сохраняет. Если он не задан через `MMM_PASSWORD`, интерактивный запуск запросит его без отображения.
+API sessions use `POST /api/login` and the returned cookie. Mutating requests
+require `X-Requested-With: meandmymusic`. Errors return `detail`; connection errors
+also include `error.code`, `error.stage`, `error.message` and `error.hint`.
 
-Для скачивания укажи пользователя и точный список файлов из результатов поиска:
+## Updates and troubleshooting
 
-```json
-[
-  {"filename": "Music\\Artist\\Album\\01 - Track.flac", "size": 12345678}
-]
+```sh
+git pull --ff-only
+docker compose up -d --build
+docker compose ps
+docker compose logs -f --tail=100 manager slskd
 ```
 
-```bash
-bin/mmm download --user SOULSEEK_USER --files files.json
+For installations predating managed Soulseek login:
+
+```sh
+python3 scripts/upgrade.py
+# Add --lan only if the app should bind to all host interfaces.
+docker compose up -d --build --force-recreate
 ```
 
-Агент может собрать цепочку из этих команд: определить нужное издание, найти файлы, скачать, дождаться очереди, получить предпросмотр и импортировать. Готовой команды `fetch-latest`, которая сама выбирает «новый релиз», пока нет. Полный контракт и пример рабочего процесса: [docs/agents.md](docs/agents.md).
+`upgrade.py` preserves existing application/API passwords, removes obsolete
+Soulseek credentials from `.env` and sets configuration file permissions.
 
-## Локальная разработка
+| Error | Check |
+| --- | --- |
+| `INVALID_PASSWORD` | Existing account password or an already taken username |
+| `INVALID_USERNAME` | Soulseek username |
+| `LOGGED_IN_ELSEWHERE` | Another client using the same account |
+| `SLSKD_ADMIN_AUTH_FAILED` | Administrative slskd username/password, separate from Soulseek |
+| `SLSKD_HTTP_401` / `SLSKD_HTTP_403` | API key and Administrator role |
+| `PROXY_REFUSED` | Proxy listening address and port, reachable from Docker |
+| `PROXY_AUTH_FAILED` | SOCKS5 proxy credentials |
+| `PROXY_DNS_FAILED` | Proxy hostname and container DNS |
+| `PROXY_TARGET_UNREACHABLE` | Proxy is reachable but CONNECT to Soulseek failed |
+| `LOGIN_TIMEOUT` | Network/account details and recent slskd logs |
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.lock -r requirements-dev.txt
-export APP_PASSWORD='unique-local-password'
-.venv/bin/uvicorn app.main:create_app --factory --reload --port 8080
+`SOULSEEK_LOGIN_TIMEOUT` accepts 5–120 seconds. Only new log records from the
+current attempt are classified; old failures do not invalidate a later attempt.
+Raw upstream logs and credentials are not returned to the UI.
+
+If logs show `API key must be between 16 and 255 characters`, use the raw
+`SLSKD_API_KEY` in `.env`; Compose adds `role=Administrator;` for slskd.
+
+If startup fails at `socketpair(AF_UNIX)` with `PermissionError`, check host
+AppArmor audit logs. On affected Proxmox hosts, the optional override relaxes
+AppArmor for these two services while retaining the standard seccomp profile:
+
+```sh
+docker compose -f compose.yaml -f compose.proxmox.yaml up -d --build
 ```
 
-При запуске без Docker используются `data/music`, `data/inbox`, `data/state`. Для slskd отдельно передай `SLSKD_URL` и `SLSKD_API_KEY`. Без них файловый менеджер работает, а поиск/загрузки показывают явную ошибку подключения. Сервер запускается с **одним worker**: очередь beets и блокировка файловых операций рассчитаны на один процесс.
+Use the same Compose files for subsequent update/log/stop commands. This is a
+host-policy issue before music directories are accessed. For directory errors,
+check mount paths and PUID/PGID instead of recursively changing archive ownership.
 
-```bash
+## Development
+
+Python 3.12+, Node.js and Docker Compose are used in CI:
+
+```sh
+.venv/bin/python -m pip install -r requirements.lock -r requirements-dev.txt
+npm ci
 .venv/bin/python -m pytest -q
 node --check app/static/app.js
-npm ci && npm test
-docker compose --env-file .env.example config --quiet
+npm test
+npx playwright install chromium --only-shell
+npm run test:browser
 ```
 
-Тесты проверяют доступ и пути, отмену файловых операций, адаптер slskd, CLI и импорт настоящих WAV-файлов через beets. Ответ MusicBrainz в тестах сопоставления подменяется, чтобы проверки не зависели от сети. DOM-тесты интерфейса проверяют вход, имена файлов, фильтр, выбор папок, переименование, поиск/скачивание и применение предпросмотра; они не заменяют визуальную проверку в настоящем браузере. CI дополнительно проверяет обе конфигурации Compose, собирает и запускает весь стек, затем проверяет настоящий API закреплённой версии slskd, запись и перезагрузку YAML в tmpfs. Тест не создаёт аккаунтов и не входит в публичную сеть Soulseek.
+Real slskd contract tests run against an isolated Compose stack. Public Soulseek
+registration/login checks are opt-in through the manual workflow, not on pushes.
 
-## Логи и диагностика запуска
+## License
 
-```bash
-docker compose ps
-docker compose logs --tail=150 manager slskd
-docker compose logs -f --tail=100 manager slskd
-curl -f http://127.0.0.1:8080/api/health
-```
-
-`Ctrl+C` завершает просмотр логов, контейнеры продолжают работать. Доступность страницы с другого компьютера проверяется по `http://IP_СЕРВЕРА:8080`, а не по `localhost`. При здоровом контейнере и недоступности через LAN проверь `APP_BIND` и firewall хоста.
-
-### Proxmox PVE: PermissionError на socketpair
-
-Ошибка `socket.socketpair(): PermissionError: [Errno 13]` появляется **до** чтения музыкальных директорий. На PVE это может быть отказ профиля AppArmor. Root на хосте не отменяет профиль контейнера. Проверь на PVE:
-
-```bash
-journalctl -k --since '10 minutes ago' | rg -i 'apparmor|denied|socketpair'
-```
-
-Если нет `rg`, можно использовать `grep -Ei 'apparmor|denied|socketpair'`.
-
-Опциональный обход для подтверждённого отказа AppArmor:
-
-```bash
-docker compose -f compose.yaml -f compose.proxmox.yaml up -d --build
-docker compose -f compose.yaml -f compose.proxmox.yaml logs -f --tail=100 manager slskd
-```
-
-Этот override отключает **AppArmor только у manager и slskd**. Он не включает `privileged`, не отключает seccomp и сохраняет `no-new-privileges`. Это ослабление защиты, поэтому стандартный Compose его не применяет. После исправления профиля/обновления хоста вернись к обычному запуску. Подходит и для Docker прямо на PVE; LXC не требуется.
-
-### PVE и диск /mnt/disk1
-
-Пример `.env` для архива и отдельной рабочей папки:
-
-```dotenv
-MUSIC_PATH=/mnt/disk1/music
-INBOX_PATH=/mnt/disk1/mamm/inbox
-STATE_PATH=/mnt/disk1/mamm/state
-SLSKD_STATE_PATH=/mnt/disk1/mamm/slskd
-APP_BIND=0.0.0.0
-```
-
-Папки `inbox`, `state`, `slskd/incomplete` нужно создать заранее. `PUID`/`PGID` задают пользователя **внутри контейнеров**, независимо от того, что Compose запустил root. При запуске `setup.py` от root он генерирует `PUID=0`, `PGID=0`; вручную скопированный `.env.example` содержит `1000:1000` — это разные варианты. Выбери UID/GID, которому разрешена запись, и не меняй владельца всего музыкального архива вслепую.
-
-```bash
-ls -ldn /mnt/disk1/music /mnt/disk1/mamm
-findmnt -T /mnt/disk1/music
-docker compose run --rm --no-deps --entrypoint python manager -m app.diagnostics
-```
-
-Диагностика показывает фактические UID/GID, владельцев точек монтирования, проверку записи временным файлом и результат `socketpair`. Значения секретов она не печатает. При необходимости добавь к команде тот же `-f compose.yaml -f compose.proxmox.yaml`, с которым запущен стек. При NFS с root-squash root тоже может не иметь доступа: ориентируйся на фактическую проверку записи. `chmod -R 777` для музыки не нужен.
-
-### Ошибка длины API-ключа
-
-В менеджере `SLSKD_API_KEY` должен содержать только сам ключ, 16–255 символов. В окружении **slskd** роль передаётся как `role=Administrator;КЛЮЧ`. Закреплённая версия slskd требует административную роль для управления серверным подключением; ключ остаётся только между серверными компонентами. Старая первая alpha ошибочно использовала `КЛЮЧ;readwrite`; обновление Compose исправляет это без смены ключа. Сообщение `API key must be between 16 and 255 characters` после обновления требует проверки длины ключа, без публикации самого значения.
-
-## Границы первой версии
-
-- Один пользователь, альбомный импорт и фиксированный шаблон папок. Нужны полные альбомы (1–300 аудиофайлов).
-- Сервер рассчитан на Linux (включая Docker). Для безопасного переименования без перезаписи используется `renameat2`; перемещения между разными файловыми системами внутри раздела не поддерживаются.
-- Пока нет ручного редактора/массовой правки тегов, копирования произвольных файлов между разделами, удаления/корзины, пользовательских шаблонов и автоматического отката импорта.
-- Обложки и другие неаудиофайлы при импорте автоматически не копируются. Существующие картинки доступны для просмотра через файловый API, но отдельной галереи пока нет.
-- Файлы можно прослушать в пределах поддержки форматов браузером; транскодирования нет.
-- Доступность API slskd и вход в сеть Soulseek проверяются отдельно. Живое скачивание требует твоей учётной записи и сетевых настроек.
-- При штатной ошибке импорта подготовленные копии удаляются. Сбой питания или `kill -9` посреди публикации может оставить часть альбома и скрытые `.mmm-*.tmp`: проверь папку перед повторным импортом. Оригиналы во входящих сохраняются. Полноценное восстановление транзакций после аварии — следующий этап.
-- История показывает последние 100 операций. Отмена перемещений рассчитана на изменения через менеджер: внешние правки дерева ей неизвестны.
-- Состояние, beets-каталог и сессионный ключ лежат в `STATE_PATH`. Включи эту папку в свой backup вместе с музыкальным архивом. Alpha не заменяет резервные копии.
-
-## Лицензия
-
-Новый код me&my music — **AGPL-3.0-only**, см. [LICENSE](LICENSE). slskd используется через API как отдельный сервис, beets — как зависимость. Их лицензии и авторство: [THIRD_PARTY.md](THIRD_PARTY.md).
+AGPL-3.0-only. See [LICENSE](LICENSE) and [THIRD_PARTY.md](THIRD_PARTY.md).

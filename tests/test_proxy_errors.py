@@ -162,7 +162,7 @@ async def test_reachable_proxy_can_still_refuse_soulseek_target():
         with pytest.raises(ConnectionFailure) as error:
             await probe_proxy(parse_proxy(f"socks5://127.0.0.1:{port}"), "vps.slsknet.org", 2271)
         assert error.value.info["code"] == "PROXY_TARGET_UNREACHABLE"
-        assert "правилами" in error.value.detail
+        assert "proxy rules" in error.value.detail
     finally:
         server.close();await server.wait_closed()
 

@@ -87,14 +87,14 @@ class SoulseekAccount:
 
     def require_managed(self):
         if not self.settings.slskd_managed_auth:
-            raise HTTPException(409, "Вход из менеджера выключен. Для штатного Compose выполните обновление конфигурации; внешний slskd требует отдельной настройки временного конфига в tmpfs.")
+            raise HTTPException(409, "Managed Soulseek login is disabled. Update the Compose configuration or configure an external slskd instance as described in the README.")
 
     async def configure(self, username=None, password=None):
         """Only write credentials to the pinned slskd tmpfs configuration, never /app."""
         token = await self.client.admin_token()
         location = await self.client.request("GET", "/options/yaml/location", bearer=token)
         if location != RUNTIME_CONFIG:
-            raise HTTPException(409, "slskd должен использовать /run/slskd/slskd.yml на tmpfs. Запись учётки в постоянный конфиг запрещена.")
+            raise HTTPException(409, "slskd must use /run/slskd/slskd.yml on tmpfs for managed login.")
         await self.client.request("DELETE", "/server", "Account settings changed")
         text = await self.client.request("GET", "/options/yaml", bearer=token)
         try:
@@ -108,7 +108,7 @@ class SoulseekAccount:
             connection["proxy"] = proxy.slskd_options() if proxy else {"enabled": False, "username": None, "password": None}
             payload = yaml.safe_dump(config, allow_unicode=True, sort_keys=False)
         except (ValueError, TypeError, yaml.YAMLError):
-            raise HTTPException(502, "slskd вернул некорректную конфигурацию") from None
+            raise HTTPException(502, "slskd returned an invalid configuration") from None
         await self.client.request("PUT", "/options/yaml", payload, bearer=token)
         if username is None:
             # slskd keeps the previous YAML in .bak. Clear that RAM-only backup too.
@@ -125,14 +125,14 @@ class SoulseekAccount:
                 # Same-username password edits also need time for the file watcher.
                 await asyncio.sleep(.75)
                 return
-        raise HTTPException(504, "slskd не применил настройки. Проверьте, что наблюдение за конфигом включено.")
+        raise HTTPException(504, "slskd did not apply the configuration. Check that configuration file monitoring is enabled.")
 
     async def login(self, username, password, remember=True, *, restoring=False):
         self.require_managed()
         if self.lock.locked():
-            raise HTTPException(409, "Уже выполняется подключение. Дождитесь результата.")
+            raise HTTPException(409, "A connection attempt is already in progress.")
         if not restoring and time.monotonic() - self.last_attempt < 3:
-            raise HTTPException(429, "Подождите несколько секунд перед новой попыткой.")
+            raise HTTPException(429, "Wait a few seconds before trying again.")
         async with self.lock:
             self.last_attempt = time.monotonic()
             self.restore_enabled = False
@@ -159,15 +159,15 @@ class SoulseekAccount:
                         self.expected_username = username
                         self.restore_enabled = remember
                         self.phase = "connected"
-                        return {"logged_in": True, "username": username, "saved": remember, "message": "Вход в сеть Soulseek подтверждён сервером."}
+                        return {"logged_in": True, "username": username, "saved": remember, "message": "Soulseek login confirmed by the server."}
                     failure = await self.new_failure(seen)
                     if failure:
                         raise failure
                     await asyncio.sleep(.5)
-                raise ConnectionFailure("LOGIN_TIMEOUT", "Soulseek не подтвердил вход за отведённое время.", stage="login", hint="Сервер не сообщил распознаваемую причину отказа. Проверь сеть, учётку и последние логи slskd; блокировка по региону пока не подтверждена.", status=504)
+                raise ConnectionFailure("LOGIN_TIMEOUT", "Soulseek did not confirm login before the timeout.", stage="login", hint="No specific failure was reported. Check network connectivity, account details and recent slskd logs.", status=504)
             except (HTTPException, OSError, ValueError) as error:
-                self.error = error.detail if isinstance(error, HTTPException) else "Не удалось сохранить защищённую учётку Soulseek"
-                self.failure = error.info if isinstance(error, ConnectionFailure) else {"code": "ACCOUNT_ERROR", "stage": self.phase, "message": self.error, "hint": "Проверь конфигурацию и логи slskd."}
+                self.error = error.detail if isinstance(error, HTTPException) else "Could not save the Soulseek account"
+                self.failure = error.info if isinstance(error, ConnectionFailure) else {"code": "ACCOUNT_ERROR", "stage": self.phase, "message": self.error, "hint": "Check the configuration and slskd logs."}
                 self.phase = "failed"
                 # Stop retrying rejected credentials and remove them from RAM YAML.
                 try:
@@ -184,7 +184,7 @@ class SoulseekAccount:
     async def logout(self):
         self.require_managed()
         if self.lock.locked():
-            raise HTTPException(409, "Дождитесь завершения подключения")
+            raise HTTPException(409, "Wait for the connection attempt to finish")
         async with self.lock:
             self.restore_enabled = False
             self.expected_username = None
@@ -203,7 +203,7 @@ class SoulseekAccount:
             self.restore_enabled = False
             raise HTTPException(409, str(error)) from None
         if not value:
-            raise HTTPException(409, "Сохранённой учётки нет. Введите логин и пароль.")
+            raise HTTPException(409, "No saved account. Enter a username and password.")
         return await self.login(value["username"], value["password"], restoring=True)
 
     async def maintain(self):

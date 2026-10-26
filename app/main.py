@@ -21,10 +21,10 @@ from pydantic import BaseModel, Field, SecretStr
 from app.config import Settings
 from app.accounts import SoulseekAccount
 from app.errors import ConnectionFailure
-from app.files import AUDIO, audio_metadata, list_directory, move, operation_lock, safe_path
+from app.files import AUDIO, audio_metadata, list_directory, move, delete, operation_lock, safe_path
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
-from app.tagger import apply_import, preview, update_catalog_paths
+from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths
 
 STATIC = Path(__file__).parent / "static"
 Root = Literal["library", "inbox"]
@@ -64,6 +64,12 @@ class Preview(BaseModel):
     release_id: UUID
 
 
+class AlbumMatch(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    artist: str | None = Field(default=None, max_length=300)
+    album: str | None = Field(default=None, max_length=300)
+
+
 class SoulseekCredentials(BaseModel):
     username: str = Field(min_length=1, max_length=255, repr=False)
     password: SecretStr = Field(min_length=1, max_length=512)
@@ -99,7 +105,7 @@ def create_app(settings=None):
                 await restore_task
             worker.shutdown(wait=True)
 
-    app = FastAPI(title="meandmymusic", version="0.3.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.4.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
 
@@ -111,7 +117,7 @@ def create_app(settings=None):
     async def validation_error(request, error):
         if request.url.path.startswith("/api/soulseek/auth/"):
             # FastAPI's default validation errors can echo entire request bodies.
-            return JSONResponse({"detail": "Проверьте поля учётки Soulseek: логин и пароль обязательны, длина пароля — до 512 символов."}, status_code=422)
+            return JSONResponse({"detail": "Enter a Soulseek username and password (up to 512 characters)."}, status_code=422)
         return await request_validation_exception_handler(request, error)
 
     def sign(value):
@@ -129,10 +135,10 @@ def create_app(settings=None):
         path = request.url.path
         if path.startswith("/api/") and path not in {"/api/health", "/api/login"}:
             if not valid_session(request.cookies.get("mmm_session", "")):
-                return JSONResponse({"detail": "Войдите в свой архив"}, status_code=401)
+                return JSONResponse({"detail": "Sign in to continue"}, status_code=401)
         if path.startswith("/api/") and request.method not in {"GET", "HEAD", "OPTIONS"}:
             if request.headers.get("X-Requested-With") != "meandmymusic":
-                return JSONResponse({"detail": "Отсутствует заголовок защиты запроса"}, status_code=403)
+                return JSONResponse({"detail": "Missing request protection header"}, status_code=403)
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
@@ -162,13 +168,13 @@ def create_app(settings=None):
                         message = message.replace(value, "[redacted]")
                 store.update_job(job_id, "failed", error=message[:2000])
                 if plan_id:
-                    store.update_job(plan_id, "failed", error="Импорт не выполнен. Создайте новый предпросмотр.")
+                    store.update_job(plan_id, "failed", error="Import failed. Create a new preview.")
         worker.submit(execute)
         return {"id": job_id}
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.3.0"}
+        return {"status": "ok", "version": "0.4.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -182,10 +188,10 @@ def create_app(settings=None):
         while bucket and bucket[0] < now - 60:
             bucket.popleft()
         if len(bucket) >= 8:
-            raise HTTPException(429, "Слишком много попыток. Подождите минуту.")
+            raise HTTPException(429, "Too many attempts. Wait a minute.")
         bucket.append(now)
         if not hmac.compare_digest(hashlib.sha256(data.password.encode()).digest(), hashlib.sha256(settings.password.encode()).digest()):
-            raise HTTPException(401, "Неверный пароль")
+            raise HTTPException(401, "Incorrect password")
         payload = f"{int(now + 43200)}.{secrets.token_hex(16)}"
         response.set_cookie("mmm_session", payload + "." + sign(payload), max_age=43200, httponly=True,
                             secure=settings.secure_cookie, samesite="strict")
@@ -205,7 +211,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.3.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.4.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -217,13 +223,13 @@ def create_app(settings=None):
     async def soulseek_login(data: SoulseekCredentials):
         username = data.username.strip()
         if not username or any(c in username for c in "\r\n\x00"):
-            raise HTTPException(422, "Укажите допустимое имя Soulseek")
+            raise HTTPException(422, "Enter a valid Soulseek username")
         return await account.login(username, data.password.get_secret_value(), data.remember)
 
     @app.post("/api/soulseek/auth/register")
     async def soulseek_register(data: SoulseekCredentials):
         if data.password_confirm is None or not hmac.compare_digest(data.password.get_secret_value().encode(), data.password_confirm.get_secret_value().encode()):
-            raise HTTPException(422, "Пароли не совпадают")
+            raise HTTPException(422, "Passwords do not match")
         # Soulseek registers an available name through the same login protocol.
         # The server does not distinguish first registration from an existing account.
         return await soulseek_login(data)
@@ -240,7 +246,7 @@ def create_app(settings=None):
     async def soulseek_forget():
         account.restore_enabled = False
         account.vault.forget()
-        return {"saved": False, "message": "Сохранённая учётка удалена. Для отключения активной сессии используйте «Выйти из Soulseek»."}
+        return {"saved": False, "message": "Saved account removed. Use Sign out to disconnect the active session."}
 
     @app.get("/api/session")
     def session():
@@ -254,14 +260,14 @@ def create_app(settings=None):
     def metadata(root: Root, path: str):
         target = safe_path(settings.library if root == "library" else settings.inbox, path)
         if not target.is_file() or target.suffix.lower() not in AUDIO:
-            raise HTTPException(400, "Выберите аудиофайл")
+            raise HTTPException(400, "Select an audio file")
         return audio_metadata(target)
 
     @app.get("/api/media")
     def media(root: Root, path: str):
         target = safe_path(settings.library if root == "library" else settings.inbox, path)
         if not target.is_file() or target.suffix.lower() not in AUDIO | {".jpg", ".jpeg", ".png", ".webp"}:
-            raise HTTPException(400, "Этот формат недоступен для просмотра")
+            raise HTTPException(400, "This file format cannot be previewed")
         return FileResponse(target)
 
     @app.post("/api/folders")
@@ -269,13 +275,13 @@ def create_app(settings=None):
         with operation_lock:
             target = safe_path(root(data.root), data.path, exists=False, allow_root=False)
             if not target.parent.is_dir():
-                raise HTTPException(400, "Родительская папка не существует")
+                raise HTTPException(400, "Parent folder does not exist")
             try:
                 target.mkdir()
             except FileExistsError:
-                raise HTTPException(409, "Папка уже существует")
+                raise HTTPException(409, "Folder already exists")
             except PermissionError:
-                raise HTTPException(403, "Нет прав на запись в папку")
+                raise HTTPException(403, "Permission denied: cannot write to this folder")
             store.event("mkdir", data.model_dump())
             return {"ok": True}
 
@@ -288,8 +294,17 @@ def create_app(settings=None):
                     update_catalog_paths(settings, settings.library / data.source, settings.library / data.destination)
                 except Exception:
                     move(root(data.root), data.destination, data.source)
-                    raise HTTPException(500, "Каталог beets не обновился. Перемещение отменено.")
+                    raise HTTPException(500, "Could not update the beets catalog. Move rolled back.")
             store.event("move", {"root": data.root, **result})
+            return {"ok": True}
+
+    @app.delete("/api/files")
+    def delete_file(data: Location):
+        with operation_lock:
+            result = delete(root(data.root), data.path)
+            if data.root == "library":
+                remove_catalog_paths(settings, settings.library / data.path)
+            store.event("delete", {"root": data.root, **result})
             return {"ok": True}
 
     @app.get("/api/history")
@@ -301,7 +316,7 @@ def create_app(settings=None):
         with operation_lock:
             event = next((e for e in store.events() if e["id"] == str(event_id)), None)
             if not event or event["undone"]:
-                raise HTTPException(409, "Операция недоступна для отмены")
+                raise HTTPException(409, "This operation cannot be undone")
             data = event["data"]
             if event["kind"] == "move":
                 # Only undo a move if the destination has not been changed by a later
@@ -309,21 +324,21 @@ def create_app(settings=None):
                 later = [e for e in store.events() if e["created"] > event["created"] and not e["undone"]]
                 if any(e["kind"] == "move" and e["data"]["root"] == data["root"] and
                        (e["data"]["source"] == data["destination"] or e["data"]["source"].startswith(data["destination"] + "/")) for e in later):
-                    raise HTTPException(409, "Сначала отмените более поздние перемещения")
+                    raise HTTPException(409, "Undo subsequent moves first")
                 move(root(data["root"]), data["destination"], data["source"])
                 if data["root"] == "library":
                     try:
                         update_catalog_paths(settings, settings.library / data["destination"], settings.library / data["source"])
                     except Exception:
                         move(root(data["root"]), data["source"], data["destination"])
-                        raise HTTPException(500, "Не удалось обновить каталог. Отмена не выполнена.")
+                        raise HTTPException(500, "Could not update the catalog. Undo failed.")
             elif event["kind"] == "mkdir":
                 try:
                     safe_path(root(data["root"]), data["path"], allow_root=False).rmdir()
                 except OSError:
-                    raise HTTPException(409, "Можно отменить создание только пустой папки")
+                    raise HTTPException(409, "Only an empty folder can be removed by undo")
             else:
-                raise HTTPException(400, "Для импорта автоматическая отмена пока недоступна. Оригиналы сохранены во входящих.")
+                raise HTTPException(400, "Import cannot be undone automatically. Original files remain in Inbox.")
             with store.connect() as db:
                 db.execute("UPDATE events SET undone=1 WHERE id=?", (str(event_id),))
             return {"ok": True}
@@ -359,7 +374,7 @@ def create_app(settings=None):
     @app.get("/api/musicbrainz/releases")
     def releases(query: str):
         if len(query.strip()) < 2 or len(query) > 300:
-            raise HTTPException(400, "Введите от 2 до 300 символов")
+            raise HTTPException(400, "Enter between 2 and 300 characters")
         return search_releases(query.strip(), settings.outbound_proxy)
 
     @app.post("/api/imports/preview")
@@ -367,13 +382,24 @@ def create_app(settings=None):
         safe_path(settings.inbox, data.path, allow_root=False)
         return run_job("preview", preview, data.path, str(data.release_id))
 
+    @app.post("/api/musicbrainz/match")
+    def match_metadata(data: AlbumMatch):
+        try:
+            return match_album(settings, data.path, data.artist, data.album)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(502, "Could not match a MusicBrainz release. Check the tags, connection, artist and album.") from None
+
     @app.post("/api/imports/{plan_id}/apply")
     def import_album(plan_id: UUID):
         plan = store.get_job(str(plan_id))
         if not plan or plan["status"] != "ready" or plan["kind"] != "preview" or not plan["result"]:
-            raise HTTPException(409, "Сначала создайте новый предпросмотр")
+            raise HTTPException(409, "Create a new preview first")
         if not store.claim_plan(str(plan_id)):
-            raise HTTPException(409, "Этот предпросмотр уже используется")
+            raise HTTPException(409, "This preview is already in use")
         return run_job("import", apply_import, plan["result"], plan_id=str(plan_id))
 
     @app.get("/api/jobs")
@@ -384,7 +410,7 @@ def create_app(settings=None):
     def job(job_id: UUID):
         result = store.get_job(str(job_id))
         if not result:
-            raise HTTPException(404, "Задание не найдено")
+            raise HTTPException(404, "Task not found")
         return result
 
     @app.get("/")

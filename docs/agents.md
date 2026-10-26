@@ -1,51 +1,80 @@
-# Работа с архивом через ИИ-агента
+# Using the music library through an agent
 
-CLI `bin/mmm` использует тот же API, что и веб-интерфейс. Он не обращается к файловой системе архива напрямую и не требует SSH на хомлаб. Установи его там, где работает агент, и передай `MMM_URL` и `MMM_PASSWORD` через окружение. GitHub-токен для работы с музыкой не нужен.
+`bin/mmm` uses the same authenticated HTTP API as the browser. It does not need
+filesystem access or SSH to the music server. Configure `MMM_URL` and
+`MMM_PASSWORD` in the agent environment. A GitHub token is not required.
 
-## Команды
+## Commands
 
-| Команда | Действие |
+| Command | Purpose |
 | --- | --- |
-| `soulseek-status` | Проверить фактический вход в сеть Soulseek |
-| `soulseek-login` / `soulseek-register` | Ввести учётку и дождаться подтверждения входа; пароль через prompt или `MMM_SOULSEEK_PASSWORD` |
-| `soulseek-logout` / `soulseek-reconnect` | Отключиться и забыть учётку / восстановить сохранённую |
-| `status` | Проверить конфигурацию и доступность API slskd |
-| `ls [PATH] --root library\|inbox` | Получить список файлов и папок |
-| `mkdir PATH --root ...` | Создать папку |
-| `mv SOURCE DESTINATION --root ...` | Переименовать или переместить внутри раздела |
-| `search QUERY --wait 20` | Начать поиск Soulseek и собрать результаты |
-| `results SEARCH_UUID` | Прочитать статус и текущие результаты |
-| `download --user USER --files FILE.json` | Скачать явно выбранные удалённые файлы |
-| `downloads` | Получить очередь загрузок |
-| `releases QUERY` | Найти издания в MusicBrainz |
-| `preview INBOX_PATH --release RELEASE_UUID [--wait]` | Сопоставить альбом и получить план без изменения музыки |
-| `apply PLAN_UUID [--wait]` | Скопировать и протегировать альбом по сохранённому плану |
-| `jobs` / `job JOB_UUID [--wait]` | Проверить фоновые задания |
-| `history` / `undo EVENT_UUID` | История и отмена создания пустых папок/перемещений |
+| `status` | Service configuration and slskd API availability |
+| `soulseek-status` | Confirmed Soulseek network login status |
+| `soulseek-login` / `soulseek-register` | Sign in/register and await server confirmation |
+| `soulseek-logout` / `soulseek-reconnect` | Disconnect and forget / reconnect a remembered account |
+| `ls [PATH] --root library\|inbox` | List files and directories |
+| `mkdir PATH --root ...` | Create a folder |
+| `mv SOURCE DESTINATION --root ...` | Move or rename within a section |
+| `search QUERY --wait 20` | Search Soulseek and collect results |
+| `results SEARCH_UUID` | Read search status/results |
+| `download --user USER --files FILE.json` | Queue explicitly selected files |
+| `downloads` | Download queue |
+| `releases QUERY` | Text search for MusicBrainz editions |
+| `preview INBOX_PATH --release RELEASE_UUID [--wait]` | Match an exact edition and preview changes |
+| `apply PLAN_UUID [--wait]` | Apply a reviewed plan by copying and tagging |
+| `jobs` / `job JOB_UUID [--wait]` | Background task status |
+| `history` / `undo EVENT_UUID` | History; undo moves and creation of empty folders |
 
-Флаг `--url` перед подкомандой переопределяет `MMM_URL`. `--password-env NAME` выбирает другое имя переменной с паролем. Не передавай пароль как аргумент команды.
+Place `--url` or `--password-env NAME` before the subcommand to override defaults.
+Soulseek credentials use an interactive prompt or `MMM_SOULSEEK_PASSWORD`.
+`--no-save` avoids persisting a remembered account. Do not pass passwords as
+command-line arguments or publish environment files.
 
-## Пример поручения
+## Download/import workflow
 
-> Найди и добавь новый альбом исполнителя в мой архив. Предпочитаю FLAC; не скачивай концертные записи, ремиксы и дубликаты.
+An agent needs the owner's selection criteria and authorized actions. Determine
+an actual target album and edition; a new reissue is not necessarily a new album.
 
-Агенту нужны политика выбора и разрешённый объём действий, заданные владельцем архива. Значение «новый» нужно привязать к конкретному релизу, а не к первому результату поиска. Поиск MusicBrainz возвращает издания: переиздание старого альбома не обязательно является новым альбомом.
+1. Use `ls` to inspect the library and identify the target release MBID.
+2. Use `search` and `results`. Select a complete album folder from a single peer;
+   check formats, track count, sizes, quality and availability.
+3. Save the exact returned `filename` and `size` values in a JSON manifest, then
+   call `download`. Never invent remote paths or file sizes.
+4. Wait for every selected transfer to complete successfully. Do not import an
+   incomplete or failed download.
+5. Use `ls --root inbox` to find the actual local album folder. Do not assume its
+   path from the remote folder name.
+6. Run `preview PATH --release MBID --wait`. Review every track, tags, confidence
+   and `result.rows` destinations.
+7. If the selection is unambiguous and import is authorized, run
+   `apply PLAN_UUID --wait`. Otherwise ask the owner to choose an edition.
+8. Confirm the import task status is `done`. Report imported file count and
+   destination. Navidrome sees the changes on its next scan.
 
-1. Через `ls` проверь существующий архив. Определи нужный альбом и его release MBID.
-2. Через `search` и `results` найди подходящую **полную папку одного пользователя**, проверь расширения, число треков, размеры, качество и наличие свободного слота.
-3. Сохрани выбранные `filename` и `size` в JSON-файл и вызови `download`. Нельзя придумывать удалённые пути или размеры.
-4. Через `downloads` дождись `Completed, Succeeded` для **каждого выбранного файла**. При ошибке не переходи к импорту.
-5. Через `ls --root inbox` найди фактическую папку завершённой загрузки. Не предполагай её путь по имени удалённой папки.
-6. Вызови `preview PATH --release MBID --wait`. Проверь соответствие каждого трека, теги, `confidence` и пути в `result.rows`.
-7. Если выбор однозначен и поручение разрешает импорт, вызови `apply PLAN_UUID --wait`. При неоднозначности уточни выбор издания у пользователя. Низкий `confidence` не исправляется принудительным автоматическим применением.
-8. Убедись, что задание имеет статус `done`, сообщи число импортированных файлов и место в архиве. Навидром увидит изменения после своего сканирования.
+These are separate commands, not a built-in autonomous agent or scheduler.
 
-В этой alpha шаги 1–8 выполняет сам агент из отдельных команд; отдельного встроенного агента, планировщика или `fetch-latest` нет.
+## API details
 
-## API
+`POST /api/login` with `{"password":"..."}` establishes the `mmm_session` cookie.
+Every mutating request needs `X-Requested-With: meandmymusic`; the CLI adds it.
+Errors contain `detail`. Connection errors additionally expose a stable code,
+stage and hint under `error`.
 
-`POST /api/login` с JSON `{"password":"..."}` устанавливает cookie `mmm_session`. Для всех изменяющих запросов нужен `X-Requested-With: meandmymusic`. CLI делает это самостоятельно. Ошибки FastAPI содержат поле `detail`.
+`POST /api/musicbrainz/match` accepts an Inbox `path` and optional `artist`/`album`
+corrections. It reads embedded metadata and returns ranked track-level beets
+candidates; it does not write files. The CLI `releases` command remains a plain
+text search and is not equivalent to metadata matching.
 
-Предпросмотр создаётся `POST /api/imports/preview` с `path` и `release_id`. Ответ — `{"id":"JOB_UUID"}`. `GET /api/jobs/JOB_UUID` возвращает `queued`, `running`, затем `ready` и `result`. Применение — `POST /api/imports/JOB_UUID/apply`, ответ — ID **нового** задания импорта. Итоговый успешный статус импорта — `done`; исходный план становится `applied` и не применяется повторно.
+`POST /api/imports/preview` accepts `path` and `release_id`, returning a task ID.
+`GET /api/jobs/ID` transitions through `queued`, `running` and `ready` with a plan
+in `result`. `POST /api/imports/ID/apply` returns a **new** import task ID. Its final
+successful status is `done`; the original preview becomes `applied`.
 
-Предпросмотр действует час и хранит SHA-256 исходников. Новая загрузка/правка исходника требует нового предпросмотра. Исходные файлы остаются во входящих. Удалять их нужно отдельно после проверки — команды удаления в этой версии нет.
+Previews expire after an hour and verify source SHA-256 fingerprints. Changed
+sources need a new preview. Originals remain in Inbox.
+
+`DELETE /api/files` accepts `{"root":"inbox","path":"Album"}` (or `library`). It
+permanently deletes a file or an entire folder, including its contents. The UI
+requires confirmation. Agents must have explicit authorization for deletion and
+must not infer that permission from authorization to import. Deletion cannot be
+undone through History.

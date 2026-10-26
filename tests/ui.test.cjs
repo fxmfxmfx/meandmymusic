@@ -35,8 +35,9 @@ async function fixture(authenticated=true, authFailure=null) {
     else if(path.pathname==='/api/login') {authenticated=true;result={ok:true};}
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
     else if(path.pathname==='/api/soulseek/auth/status') result=account;
-    else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Вход подтверждён'};}}
+    else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Signed in'};}}
     else if(path.pathname==='/api/soulseek/auth/logout') {account={...account,logged_in:false,username:null,saved:false};result=account;}
+    else if(path.pathname==='/api/files'&&method==='DELETE') {entries=entries.filter(entry=>entry.path!==body.path);result={ok:true};}
     else if(path.pathname==='/api/files') result={path:path.searchParams.get('path')||'.',entries:path.searchParams.get('path')?[]:entries};
     else if(path.pathname==='/api/metadata') result={title:'Song',artist:'Test Artist',duration:61,bitrate:320};
     else if(path.pathname==='/api/folders') {entries.push(folder(body.path));result={ok:true};}
@@ -45,6 +46,7 @@ async function fixture(authenticated=true, authFailure=null) {
     else if(path.pathname===`/api/soulseek/searches/${search}`) result={search:{id:search,isComplete:true},responses:[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
     else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:[];
     else if(path.pathname==='/api/jobs') result=[plan];
+    else if(path.pathname==='/api/musicbrainz/match') result={artist:body.artist??'Tagged Artist',album:body.album??'Tagged Album',tracks:2,has_tags:true,candidates:[{id:release,artist:'Tagged Artist',title:'Tagged Album',tracks:2,confidence:98,extra_files:0,missing_tracks:0}]};
     else if(path.pathname===`/api/jobs/${planId}`) result=plan;
     else if(path.pathname===`/api/imports/${planId}/apply`) result={id:'import-job'};
     else if(path.pathname==='/api/jobs/import-job') result={status:'done',result:{files:1}};
@@ -53,6 +55,7 @@ async function fixture(authenticated=true, authFailure=null) {
     else {status=404;result={detail:'Unmocked route: '+path.pathname};}
     return {ok:status<400,status,json:async()=>result};
   };
+  window.eval(fs.readFileSync('app/static/theme.js','utf8'));
   window.eval(code);
   await tick();
   const click = selector => {
@@ -70,7 +73,7 @@ test('login opens the archive, escaped filenames render as text, filter works', 
   try {
     assert.ok(f.window.document.querySelector('#login-form'));
     f.window.document.querySelector('#password').value='archive-password';f.submit('#login-form');await tick();
-    assert.match(f.window.document.querySelector('h1').textContent,/Место для твоей музыки/);
+    assert.match(f.window.document.querySelector('h1').textContent,/Library/);
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,2);
     assert.ok(f.window.document.querySelector('.folder-name').textContent.includes('<script>'));
     const filter=f.window.document.querySelector('#file-filter');filter.value='Second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
@@ -106,7 +109,7 @@ test('Soulseek results group into folders and download sends exact filenames and
     f.click('[data-download-group="0"]');await tick();
     const call=f.calls.find(c=>c.path==='/api/soulseek/downloads'&&c.method==='POST');
     assert.deepEqual(call.body,{username:'Peer',files:[{filename:'Music\\Album\\01.flac',size:123456}]});
-    assert.match(f.window.document.querySelector('#toast').textContent,/поставлено в очередь/);
+    assert.match(f.window.document.querySelector('#toast').textContent,/files queued/);
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
 });
@@ -120,7 +123,7 @@ test('saved preview shows exact destination and apply follows import job to comp
     assert.match(f.window.document.querySelector('.tag-diff').textContent,/Correct title/);
     f.click('[data-apply-plan]');await tick();
     assert.ok(f.calls.some(c=>c.path===`/api/imports/${planId}/apply`&&c.method==='POST'));
-    assert.match(f.window.document.querySelector('#toast').textContent,/Оригиналы сохранены/);
+    assert.match(f.window.document.querySelector('#toast').textContent,/Original files remain/);
     assert.equal(f.window.document.querySelector('#modal').open,false);
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
@@ -130,39 +133,118 @@ test('Soulseek registration confirms passwords and displays only verified server
   const f=await fixture();
   try {
     f.click('[data-nav="settings"]');await tick();
-    assert.match(f.window.document.querySelector('.account-status').textContent,/Нет входа/);
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Not signed in/);
     f.click('[data-action="soulseek-auth-register"]');
     f.window.document.querySelector('#soulseek-username').value='New User';
     f.window.document.querySelector('#soulseek-password').value='private-password';
     f.window.document.querySelector('#soulseek-confirm').value='different';
     f.submit('#soulseek-account-form');await tick();
-    assert.match(f.window.document.querySelector('#soulseek-account-error').textContent,/не совпадают/);
+    assert.match(f.window.document.querySelector('#soulseek-account-error').textContent,/do not match/);
     assert.ok(!f.calls.some(c=>c.path==='/api/soulseek/auth/register'));
     f.window.document.querySelector('#soulseek-confirm').value='private-password';
     f.submit('#soulseek-account-form');await tick();
     const call=f.calls.find(c=>c.path==='/api/soulseek/auth/register');
     assert.equal(call.body.username,'New User');assert.equal(call.body.remember,true);
-    assert.match(f.window.document.querySelector('.account-status').textContent,/Вход подтверждён/);
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Signed in/);
     assert.ok(!f.window.document.body.innerHTML.includes('private-password'));
     f.click('[data-action="soulseek-logout"]');await tick();
-    assert.match(f.window.document.querySelector('.account-status').textContent,/Нет входа/);
+    assert.match(f.window.document.querySelector('.account-status').textContent,/Not signed in/);
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
 });
 
 test('Soulseek failure displays code and hint, clears password and preserves manager session', async () => {
-  const f=await fixture(true,{code:'INVALID_PASSWORD',stage:'login',message:'Soulseek отклонил пароль.',hint:'Проверь пароль или выбери свободное имя.'});
+  const f=await fixture(true,{code:'INVALID_PASSWORD',stage:'login',message:'Soulseek rejected the password.',hint:'Check the password or choose an available name.'});
   try {
     f.click('[data-nav="settings"]');await tick();
     f.window.document.querySelector('#soulseek-username').value='User';
     f.window.document.querySelector('#soulseek-password').value='do-not-display-this';
     f.submit('#soulseek-account-form');await tick();
     assert.match(f.window.document.querySelector('.account-panel .error-box').textContent,/INVALID_PASSWORD/);
-    assert.match(f.window.document.querySelector('.account-panel .error-box').textContent,/свободное имя/);
+    assert.match(f.window.document.querySelector('.account-panel .error-box').textContent,/available name/);
     assert.ok(f.window.document.querySelector('#soulseek-account-form'));
     assert.ok(!f.window.document.querySelector('#login-form'));
     assert.equal(f.window.document.querySelector('#soulseek-password').value,'');
     assert.ok(!f.window.document.body.innerHTML.includes('do-not-display-this'));
     assert.deepEqual(f.errors,[]);
   } finally {f.close();}
+});
+
+test('delete requires confirmation and works in Library and Inbox', async () => {
+  for(const root of ['library','inbox']){
+    const f=await fixture();
+    try{
+      if(root==='inbox'){f.click('[data-nav="inbox"]');await tick();}
+      assert.equal(f.window.document.querySelector('[data-action="delete"]').disabled,true);
+      f.click('.folder-card');f.click('[data-action="delete"]');
+      assert.match(f.window.document.querySelector('#modal').textContent,/permanently deleted/);
+      assert.ok(!f.calls.some(c=>c.method==='DELETE'));
+      f.click('[data-action="close-modal"]');assert.ok(!f.calls.some(c=>c.method==='DELETE'));
+      f.click('[data-action="delete"]');f.click('[data-action="confirm-delete"]');await tick();
+      assert.ok(f.calls.some(c=>c.method==='DELETE'&&c.path==='/api/files'&&c.body.root===root&&c.body.path==='Artist <script>'));
+      assert.equal(f.window.document.querySelectorAll('.folder-card').length,1);
+      assert.deepEqual(f.errors,[]);
+    }finally{f.close();}
+  }
+});
+
+test('graphical move picker navigates folders without typing a path', async () => {
+  const f=await fixture();
+  try{
+    f.click('.folder-card');f.click('[data-action="move"]');await tick();
+    assert.ok(!f.window.document.querySelector('#file-value'));
+    f.click('[data-picker-path="Second Artist"]');await tick();
+    f.click('[data-action="confirm-move"]');await tick();
+    assert.ok(f.calls.some(c=>c.path==='/api/move'&&c.body.source==='Artist <script>'&&c.body.destination==='Second Artist/Artist <script>'));
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+});
+
+test('all five themes persist across initialization and contain no promotional panels', async () => {
+  const f=await fixture();
+  try{
+    const select=f.window.document.querySelector('[data-theme-picker]');
+    assert.equal(select.options.length,5);
+    for(const id of ['current','light','dark','gruvbox','mocha']){
+      select.value=id;select.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+      assert.equal(f.window.localStorage.getItem('mmm-theme'),id);
+      f.window.eval(fs.readFileSync('app/static/theme.js','utf8'));
+      assert.equal(f.window.document.documentElement.dataset.theme,id);
+    }
+    assert.ok(!f.window.document.querySelector('.hero,.own-your-music,.login-story'));
+    assert.equal(f.window.document.documentElement.lang,'en');
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+});
+
+test('matching starts with metadata and accepts explicit artist and album corrections', async () => {
+  const f=await fixture();
+  try{
+    f.click('[data-nav="inbox"]');await tick();f.click('.folder-card');f.click('[data-action="match"]');await tick();
+    assert.ok(f.calls.some(c=>c.path==='/api/musicbrainz/match'&&c.body.path==='Artist <script>'&&!('artist' in c.body)));
+    assert.equal(f.window.document.querySelector('#match-artist').value,'Tagged Artist');
+    assert.equal(f.window.document.querySelector('#match-album').value,'Tagged Album');
+    assert.match(f.window.document.querySelector('.match-score').textContent,/98%/);
+    f.window.document.querySelector('#match-artist').value='Corrected Artist';f.submit('#release-form');await tick();
+    assert.ok(f.calls.some(c=>c.path==='/api/musicbrainz/match'&&c.body.artist==='Corrected Artist'&&c.body.album==='Tagged Album'));
+    assert.ok(!f.calls.some(c=>c.path==='/api/musicbrainz/releases'));
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+});
+
+test('hover navigation retains the drag source and drop uses the original file path', async () => {
+  const f=await fixture();
+  try{
+    const transfer={setData(){},effectAllowed:'',dropEffect:''};
+    const drag=(element,type)=>{const event=new f.window.Event(type,{bubbles:true,cancelable:true});Object.defineProperty(event,'dataTransfer',{value:transfer});element.dispatchEvent(event);};
+    const source=f.window.document.querySelector('.file-row');drag(source,'dragstart');
+    const target=f.window.document.querySelector('[data-drop-path="Second Artist"]');drag(target,'dragover');
+    await new Promise(resolve=>setTimeout(resolve,710));
+    assert.ok(source.isConnected,'Native drag source must remain connected through navigation');
+    assert.ok(f.calls.some(c=>c.path==='/api/files'&&c.params.get('path')==='Second Artist'));
+    drag(f.window.document.querySelector('.browser'),'drop');await tick();
+    assert.ok(f.calls.some(c=>c.path==='/api/move'&&c.body.source==='Song.wav'&&c.body.destination==='Second Artist/Song.wav'));
+    assert.ok(!f.window.document.body.classList.contains('is-dragging'));
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
 });

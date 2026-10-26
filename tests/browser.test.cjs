@@ -1,0 +1,124 @@
+const {test,before,after}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs/promises');
+const path=require('node:path');
+const os=require('node:os');
+const net=require('node:net');
+const {spawn}=require('node:child_process');
+const {randomBytes}=require('node:crypto');
+const {chromium}=require('playwright');
+
+let directory,server,browser,page,url;
+const password=randomBytes(24).toString('hex');
+const errors=[],moves=[];
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+
+before(async()=>{
+ directory=await fs.mkdtemp(path.join(os.tmpdir(),'mmm-browser-'));
+ for(const name of ['music','inbox','state'])await fs.mkdir(path.join(directory,name));
+ for(const name of ['music/Drag Test/Source','music/Drag Test/Target/Nested','inbox/Delete Album'])await fs.mkdir(path.join(directory,name),{recursive:true});
+ await fs.writeFile(path.join(directory,'music/Drag Test/Source/Track.wav'),'browser test fixture');
+ await fs.writeFile(path.join(directory,'inbox/Delete Album/Track.wav'),'browser test fixture');
+ const port=await new Promise(resolve=>{const socket=net.createServer();socket.listen(0,'127.0.0.1',()=>{const port=socket.address().port;socket.close(()=>resolve(port));});});
+ url=`http://127.0.0.1:${port}`;
+ const python=process.env.MMM_TEST_PYTHON||'python';
+ server=spawn(python,['-m','uvicorn','app.main:create_app','--factory','--host','127.0.0.1','--port',String(port)],{
+  env:{...process.env,APP_PASSWORD:password,MUSIC_DIR:path.join(directory,'music'),INBOX_DIR:path.join(directory,'inbox'),STATE_DIR:path.join(directory,'state'),SLSKD_API_KEY:'',OUTBOUND_PROXY:''},stdio:['ignore','ignore','pipe']
+ });
+ let serverLog='';server.stderr.on('data',chunk=>serverLog=(serverLog+chunk).slice(-4000));
+ let ready=false;
+ for(let i=0;i<100;i++){try{if((await fetch(url+'/api/health')).ok){ready=true;break;}}catch{}await pause(100);}
+ assert.ok(ready,'Disposable application failed to start: '+serverLog);
+ browser=await chromium.launch({headless:true,args:['--no-sandbox']});
+ page=await browser.newPage({viewport:{width:1440,height:1000}});
+ page.on('pageerror',error=>errors.push(error.message));
+ page.on('request',request=>{if(request.url().endsWith('/api/move')&&request.method()==='POST')moves.push(request.postDataJSON());});
+ await page.goto(url);await page.locator('#password').fill(password);await page.locator('#login-form button').click();
+ await page.locator('[data-select="Drag Test"]').waitFor();
+ await fs.mkdir('artifacts',{recursive:true});
+});
+
+after(async()=>{
+ if(browser)await browser.close();
+ if(server){server.kill();await new Promise(resolve=>server.exitCode!==null?resolve():server.once('exit',resolve));}
+ if(directory)await fs.rm(directory,{recursive:true,force:true});
+});
+
+async function hover(locator){const box=await locator.boundingBox();assert.ok(box);await page.mouse.move(box.x+box.width/2,box.y+box.height/2,{steps:12});}
+async function exists(relative){try{await fs.access(path.join(directory,relative));return true;}catch{return false;}}
+async function waitForFile(relative){for(let i=0;i<60;i++){if(await exists(relative))return;await pause(100);}assert.fail('Expected file: '+relative);}
+
+test('native drag survives breadcrumb navigation and two hover-open folders',async()=>{
+ await page.locator('[data-select="Drag Test"]').dblclick();
+ await page.locator('[data-select="Drag Test/Source"]').dblclick();
+ const source=page.locator('[data-select="Drag Test/Source/Track.wav"]');
+ const box=await source.boundingBox();
+ await page.mouse.move(box.x+70,box.y+box.height/2);await page.mouse.down();
+ try{
+  await page.mouse.move(box.x+95,box.y+box.height/2+8,{steps:8});
+  await hover(page.locator('[data-path="Drag Test"]'));
+  await page.locator('#drag-file-list [data-select="Drag Test/Target"]').waitFor({timeout:5000});
+  assert.equal(await source.evaluate(element=>element.isConnected),true);
+  assert.equal(moves.length,0,'Hovering must never move files');
+  // Revisiting the source parent is a no-op drop, but must still allow browsing.
+  await hover(page.locator('#drag-file-list [data-select="Drag Test/Source"]'));
+  await page.locator('[data-path="Drag Test/Source"]').waitFor({timeout:5000});
+  await hover(page.locator('[data-path="Drag Test"]'));
+  await page.locator('#drag-file-list [data-select="Drag Test/Target"]').waitFor({timeout:5000});
+  await hover(page.locator('#drag-file-list [data-select="Drag Test/Target"]'));
+  await page.locator('#drag-file-list [data-select="Drag Test/Target/Nested"]').waitFor({timeout:5000});
+  await hover(page.locator('#drag-file-list [data-select="Drag Test/Target/Nested"]'));
+  await page.locator('[data-path="Drag Test/Target/Nested"]').waitFor({timeout:5000});
+  await hover(page.locator('#drag-file-list .empty'));
+  await page.mouse.up();
+  await waitForFile('music/Drag Test/Target/Nested/Track.wav');
+  assert.equal(await exists('music/Drag Test/Source/Track.wav'),false);
+  assert.deepEqual(moves[0],{root:'library',source:'Drag Test/Source/Track.wav',destination:'Drag Test/Target/Nested/Track.wav'});
+  await page.locator('#file-list [data-select="Drag Test/Target/Nested/Track.wav"]').waitFor();
+ }finally{await page.mouse.up();await page.keyboard.press('Escape');}
+ assert.deepEqual(errors,[]);
+});
+
+test('folder dragging and graphical picker perform actual filesystem moves',async()=>{
+ await page.locator('[data-path="Drag Test"]').click();
+ await page.locator('[data-select="Drag Test/Source"]').dragTo(page.locator('[data-select="Drag Test/Target"]'));
+ await waitForFile('music/Drag Test/Target/Source');
+ await page.locator('[data-select="Drag Test/Target"]').dblclick();
+ await page.locator('[data-select="Drag Test/Target/Source"]').click();
+ await page.locator('[data-action="move"]').click();
+ await page.locator('[data-picker-path="Drag Test"]').click();
+ await page.locator('[data-action="confirm-move"]').click();
+ await waitForFile('music/Drag Test/Source');
+ assert.equal(await exists('music/Drag Test/Target/Source'),false);
+ assert.deepEqual(errors,[]);
+});
+
+test('permanent deletion confirms the target and deletes nested Inbox contents',async()=>{
+ await page.locator('[data-nav="inbox"]').click();await page.locator('[data-select="Delete Album"]').click();
+ await page.locator('[data-action="delete"]').click();
+ assert.match(await page.locator('#modal').textContent(),/permanently deleted/);
+ await page.locator('[data-action="close-modal"]').click();assert.ok(await exists('inbox/Delete Album/Track.wav'));
+ await page.locator('[data-action="delete"]').click();await page.locator('[data-action="confirm-delete"]').click();
+ await page.locator('#modal').waitFor({state:'hidden'});
+ assert.equal(await exists('inbox/Delete Album'),false);
+ assert.deepEqual(errors,[]);
+});
+
+test('themes cover desktop, mobile and login without overflow or browser errors',async()=>{
+ await page.locator('[data-nav="library"]').click();
+ for(const theme of ['current','light','dark','gruvbox','mocha']){
+  await page.locator('[data-theme-picker]').selectOption(theme);
+  await page.screenshot({path:`artifacts/theme-${theme}.png`,fullPage:true});
+  assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),theme);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ }
+ await page.reload();await page.locator('[data-select="Drag Test"]').waitFor();
+ assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
+ await page.setViewportSize({width:390,height:844});
+ await page.screenshot({path:'artifacts/mobile.png',fullPage:true});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.locator('[data-action="logout"]').click();await page.locator('#login-form').waitFor();
+ await page.screenshot({path:'artifacts/login.png',fullPage:true});
+ assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
+ assert.deepEqual(errors,[]);
+});

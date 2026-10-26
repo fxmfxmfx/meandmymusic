@@ -138,10 +138,10 @@ def test_vault_rejects_tamper_and_changed_app_password(settings):
     vault = CredentialVault(settings)
     vault.save("username", "password")
     settings.password = "different-archive-password"
-    with pytest.raises(ValueError, match="расшифровать"):
+    with pytest.raises(ValueError, match="decrypt"):
         CredentialVault(settings).load()
     vault.path.write_bytes(b"tampered")
-    with pytest.raises(ValueError, match="расшифровать"):
+    with pytest.raises(ValueError, match="decrypt"):
         vault.load()
 
 
@@ -161,7 +161,7 @@ def test_account_routes_require_manager_auth_and_do_not_echo_bad_payloads(client
     assert "secret-password" not in response.text
     assert "secret-username" not in response.text
     response = client.post("/api/soulseek/auth/register", json={"username": "user", "password": "private", "password_confirm": "other"})
-    assert response.status_code == 422 and "не совпадают" in response.json()["detail"]
+    assert response.status_code == 422 and "do not match" in response.json()["detail"]
     assert client.post("/api/soulseek/auth/login", json={"username": "u", "password": "p"}).status_code == 409
 
 

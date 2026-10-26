@@ -86,3 +86,32 @@ def test_settings_refuse_missing_password_or_nested_roots(tmp_path):
         Settings(password="").prepare()
     with pytest.raises(RuntimeError, match="non-nested"):
         Settings(password="long-enough-password", library=tmp_path, inbox=tmp_path / "inbox", state=tmp_path / "state").prepare()
+
+
+@pytest.mark.parametrize("section", ["library", "inbox"])
+def test_delete_file_and_nonempty_folder_in_both_roots(auth, settings, section):
+    root = getattr(settings, section)
+    (root / "single.flac").write_bytes(b"audio")
+    folder = root / "album"
+    folder.mkdir()
+    (folder / "track.flac").write_bytes(b"audio")
+    assert auth.request("DELETE", "/api/files", json={"root": section, "path": "single.flac"}).status_code == 200
+    assert not (root / "single.flac").exists()
+    assert auth.request("DELETE", "/api/files", json={"root": section, "path": "album"}).status_code == 200
+    assert not folder.exists()
+    event = auth.get("/api/history").json()[0]
+    assert event["kind"] == "delete" and event["data"]["root"] == section
+    assert auth.post(f"/api/history/{event['id']}/undo").status_code == 400
+
+
+def test_delete_rejects_root_escape_and_top_level_symlink(auth, settings):
+    (settings.state / "keep").write_text("keep")
+    (settings.library / "outside").symlink_to(settings.state, target_is_directory=True)
+    for path in ("", ".", "../state", "/etc", "outside"):
+        assert auth.request("DELETE", "/api/files", json={"root": "library", "path": path}).status_code == 400
+    assert (settings.state / "keep").read_text() == "keep"
+    # A nested link is removed as a link; its target is never recursively deleted.
+    (settings.library / "album").mkdir()
+    (settings.library / "album/link").symlink_to(settings.state, target_is_directory=True)
+    assert auth.request("DELETE", "/api/files", json={"root": "library", "path": "album"}).status_code == 200
+    assert (settings.state / "keep").read_text() == "keep"

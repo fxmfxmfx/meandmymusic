@@ -28,4 +28,4 @@ with target.open("x") as file:
 print("Created .env and data directories. Archive password is in .env (APP_PASSWORD).")
 print("Start: docker compose up -d --build")
 print("Open: http://localhost:8080")
-print("Soulseek login/registration: Connections → Soulseek in the web UI.")
+print("Soulseek login/registration: Settings → Soulseek in the web UI.")

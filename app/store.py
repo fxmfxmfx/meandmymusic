@@ -10,7 +10,7 @@ class Store:
         with self.connect() as db:
             db.execute("CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, created REAL, kind TEXT, data TEXT, undone INTEGER DEFAULT 0)")
             db.execute("CREATE TABLE IF NOT EXISTS jobs (id TEXT PRIMARY KEY, created REAL, kind TEXT, status TEXT, result TEXT, error TEXT)")
-            db.execute("UPDATE jobs SET status='interrupted', error='Сервер перезапущен. Создайте новый предпросмотр; если импорт уже начался, проверьте папку назначения.' WHERE status IN ('queued','running','applying')")
+            db.execute("UPDATE jobs SET status='interrupted', error='The server restarted. Create a new preview; if an import started, check the destination folder.' WHERE status IN ('queued','running','applying')")
 
     def connect(self):
         return sqlite3.connect(self.path, timeout=30)
