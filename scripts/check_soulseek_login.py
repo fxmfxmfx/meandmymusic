@@ -21,7 +21,8 @@ def main():
     username = "mmmtest_" + secrets.token_hex(8)
     password = secrets.token_urlsafe(24)
     stage = "archive_login"
-    with httpx.Client(base_url="http://127.0.0.1:8080", timeout=150, trust_env=False) as client:
+    with httpx.Client(base_url="http://127.0.0.1:8080", timeout=150, trust_env=False,
+                      headers={"X-Requested-With": "meandmymusic"}) as client:
         def call(method, path, **kwargs):
             response = client.request(method, path, **kwargs)
             if response.is_error:
