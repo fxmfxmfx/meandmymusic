@@ -8,6 +8,7 @@ cleared from the stack on exit. The public account itself cannot be deleted.
 """
 import json
 import secrets
+import socket
 import sys
 import time
 from pathlib import Path
@@ -21,6 +22,11 @@ def main():
     username = "mmmtest_" + secrets.token_hex(8)
     password = secrets.token_urlsafe(24)
     stage = "archive_login"
+    try:
+        with socket.create_connection(("vps.slsknet.org", 2271), timeout=8):
+            print("Soulseek TCP 2271: reachable", flush=True)
+    except OSError as error:
+        print("Soulseek TCP 2271: " + type(error).__name__, flush=True)
     with httpx.Client(base_url="http://127.0.0.1:8080", timeout=150, trust_env=False,
                       headers={"X-Requested-With": "meandmymusic"}) as client:
         def call(method, path, **kwargs):
@@ -31,6 +37,17 @@ def main():
                 print(json.dumps({"check": stage, "http_status": response.status_code,
                                   "code": failure.get("code"), "stage": failure.get("stage"),
                                   "message": failure.get("message")}, ensure_ascii=False), flush=True)
+                # Explicit isolated CI diagnosis only; never exposed in the web UI.
+                try:
+                    with httpx.Client(base_url="http://127.0.0.1:5030/api/v0", trust_env=False,
+                                      headers={"X-API-Key": values["SLSKD_API_KEY"]}, timeout=8) as slskd:
+                        logs = slskd.get("/logs/live").json()
+                        text = json.dumps(logs[-30:] if isinstance(logs, list) else {"unexpected_log_shape": type(logs).__name__})
+                        for secret in (username, password, values["APP_PASSWORD"], values["SLSKD_API_KEY"]):
+                            text = text.replace(secret, "[REDACTED]")
+                        print("Isolated slskd diagnostic: " + text, flush=True)
+                except Exception:
+                    print("Isolated slskd diagnostic unavailable", flush=True)
                 raise RuntimeError("Live Soulseek check failed; safe diagnostic printed above")
             return response.json()
 
