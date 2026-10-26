@@ -1,0 +1,5 @@
+fastapi==0.115.12
+uvicorn==0.34.2
+httpx[socks]==0.28.1
+mutagen==1.47.0
+beets==2.3.1

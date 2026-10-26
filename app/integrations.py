@@ -1,0 +1,51 @@
+import threading
+import time
+from urllib.parse import quote
+
+import httpx
+from fastapi import HTTPException
+
+musicbrainz_lock = threading.Lock()
+
+
+class Soulseek:
+    def __init__(self, settings):
+        self.settings = settings
+
+    async def request(self, method, path, data=None):
+        if not self.settings.slskd_key:
+            raise HTTPException(503, "Укажите SLSKD_URL и SLSKD_API_KEY в настройках сервера")
+        try:
+            async with httpx.AsyncClient(timeout=25, follow_redirects=False, trust_env=False) as client:
+                response = await client.request(method, self.settings.slskd_url + "/api/v0" + path,
+                                                headers={"X-API-Key": self.settings.slskd_key}, json=data)
+            if response.is_error:
+                raise HTTPException(502, f"slskd вернул HTTP {response.status_code}. Проверьте подключение и права API-ключа.")
+            return response.json() if response.content else {}
+        except (httpx.HTTPError, ValueError) as error:
+            raise HTTPException(502, "slskd недоступен или вернул некорректный ответ") from error
+
+
+def search_releases(query):
+    # Shared with the beets matcher: one MusicBrainz request at a time.
+    with musicbrainz_lock:
+        try:
+            response = httpx.get("https://musicbrainz.org/ws/2/release/",
+                                 params={"query": query, "fmt": "json", "limit": 15},
+                                 headers={"User-Agent": "meandmymusic/0.1 (https://github.com/fxmfxmfx/meandmymusic)"}, timeout=25)
+            response.raise_for_status()
+            return [{"id": r["id"], "title": r.get("title", ""), "date": r.get("date", ""),
+                     "artist": "".join(a.get("name", a.get("artist", {}).get("name", "")) + a.get("joinphrase", "") for a in r.get("artist-credit", []) if isinstance(a, dict)),
+                     "country": r.get("country", ""), "status": r.get("status", ""),
+                     "tracks": r.get("track-count", 0), "score": r.get("score", 0),
+                     "format": ", ".join(m.get("format", "") for m in r.get("media", [])),
+                     "disambiguation": r.get("disambiguation", "")}
+                    for r in response.json().get("releases", [])]
+        except (httpx.HTTPError, ValueError) as error:
+            raise HTTPException(502, "MusicBrainz недоступен. Попробуйте позже.") from error
+        finally:
+            time.sleep(1.1)
+
+
+def segment(value):
+    return quote(value, safe="")

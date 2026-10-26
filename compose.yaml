@@ -1,0 +1,53 @@
+services:
+  manager:
+    build: .
+    user: "${PUID:-1000}:${PGID:-1000}"
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8080"
+    environment:
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env}
+      MUSIC_DIR: /music
+      INBOX_DIR: /inbox
+      STATE_DIR: /state
+      SLSKD_URL: http://slskd:5030
+      SLSKD_API_KEY: ${SLSKD_API_KEY:?Set SLSKD_API_KEY in .env}
+      NAVIDROME_URL: ${NAVIDROME_URL:-}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    volumes:
+      - ${MUSIC_PATH:-./data/music}:/music
+      - ${INBOX_PATH:-./data/inbox}:/inbox
+      - ${STATE_PATH:-./data/state}:/state
+    depends_on:
+      - slskd
+    security_opt:
+      - no-new-privileges:true
+  slskd:
+    image: ${SLSKD_IMAGE:-slskd/slskd:0.26.2}
+    user: "${PUID:-1000}:${PGID:-1000}"
+    init: true
+    restart: unless-stopped
+    ports:
+      - "${SLSKD_UI_BIND:-127.0.0.1}:5030:5030"
+      - "${SOULSEEK_PORT:-50300}:${SOULSEEK_PORT:-50300}"
+    environment:
+      SLSKD_NO_HTTPS: "true"
+      SLSKD_NO_VERSION_CHECK: "true"
+      SLSKD_REMOTE_CONFIGURATION: "false"
+      SLSKD_UMASK: "002"
+      SLSKD_API_KEY: "${SLSKD_API_KEY:?Set SLSKD_API_KEY in .env};readwrite"
+      SLSKD_USERNAME: archive
+      SLSKD_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env}
+      SLSKD_SLSK_USERNAME: ${SOULSEEK_USERNAME:?Set SOULSEEK_USERNAME in .env}
+      SLSKD_SLSK_PASSWORD: ${SOULSEEK_PASSWORD:?Set SOULSEEK_PASSWORD in .env}
+      SLSKD_SLSK_LISTEN_PORT: ${SOULSEEK_PORT:-50300}
+      SLSKD_DOWNLOADS_DIR: /inbox
+      SLSKD_INCOMPLETE_DIR: /app/incomplete
+    volumes:
+      - ${SLSKD_STATE_PATH:-./data/slskd}:/app
+      - ${INBOX_PATH:-./data/inbox}:/inbox
+      - ${MUSIC_PATH:-./data/music}:/music:ro
+    security_opt:
+      - no-new-privileges:true
+    # Sharing is opt-in: set SLSKD_SHARED_DIR=/music to share your archive.

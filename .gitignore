@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+.pytest_cache/
+.env
+data/
+*.pyc
+node_modules/
+test-results/
+playwright-report/
+pytest-of-root/
+/pip-*/
+/tmp*
