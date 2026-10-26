@@ -165,7 +165,7 @@ def test_upgrade_removes_legacy_secrets_without_backups(tmp_path):
 
 def test_compose_uses_valid_key_syntax_tmpfs_and_no_soulseek_secrets():
     text = Path("compose.yaml").read_text()
-    assert "role=ReadWrite;${SLSKD_API_KEY" in text
+    assert "role=Administrator;${SLSKD_API_KEY" in text
     assert "SOULSEEK_USERNAME" not in text and "SOULSEEK_PASSWORD" not in text
     assert "SLSKD_SLSK_USERNAME" not in text and "SLSKD_SLSK_PASSWORD" not in text
     assert "SLSKD_CONFIG: /run/slskd/slskd.yml" in text

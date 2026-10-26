@@ -37,7 +37,7 @@ services:
       SLSKD_REMOTE_CONFIGURATION: "true"
       SLSKD_CONFIG: /run/slskd/slskd.yml
       SLSKD_UMASK: "002"
-      SLSKD_API_KEY: "role=ReadWrite;${SLSKD_API_KEY:?Set SLSKD_API_KEY in .env}"
+      SLSKD_API_KEY: "role=Administrator;${SLSKD_API_KEY:?Set SLSKD_API_KEY in .env}"
       SLSKD_USERNAME: archive
       SLSKD_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env}
       SLSKD_SLSK_LISTEN_PORT: ${SOULSEEK_PORT:-50300}
