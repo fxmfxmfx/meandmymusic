@@ -28,7 +28,11 @@ async def test_pinned_slskd_key_admin_login_config_reload_and_tmpfs(tmp_path):
     assert isinstance(await client.request("GET", "/application"), dict)
     container = subprocess.check_output(["docker", "compose", "ps", "-q", "slskd"], text=True).strip()
     inspected = json.loads(subprocess.check_output(["docker", "inspect", container], text=True))[0]
-    assert any(mount["Type"] == "tmpfs" and mount["Destination"] == "/run/slskd" for mount in inspected["Mounts"])
+    # Compose's short tmpfs syntax is represented under HostConfig.Tmpfs,
+    # not consistently under Mounts. Verify both configuration and the live mount.
+    assert "/run/slskd" in inspected["HostConfig"].get("Tmpfs", {})
+    mounts = subprocess.check_output(["docker", "exec", container, "cat", "/proc/mounts"], text=True)
+    assert any(parts[1:3] == ["/run/slskd", "tmpfs"] for parts in (line.split() for line in mounts.splitlines()))
     username, password = "mmm-api-contract-test", "temporary-contract-password"
     try:
         # configure() stops the connection watchdog. No PUT /server is issued:
