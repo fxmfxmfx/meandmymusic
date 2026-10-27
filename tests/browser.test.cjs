@@ -317,15 +317,15 @@ test('Library duration map reads actual audio tags, supports pointer hover and t
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
  await page.setViewportSize({width:390,height:844});
- const mobilePoint=await page.evaluate(()=>{const rect=document.querySelector('.map-chart>svg').getBoundingClientRect();return {x:rect.x+rect.width*.65,y:rect.y+rect.height*.5};});
+ const mobilePoint=await page.evaluate(()=>{const rect=document.querySelector('.map-chart>svg').getBoundingClientRect();return {x:rect.x+rect.width*.35,y:rect.y+rect.height*.5};});
  // Dispatch a touchscreen tap through Chromium's touch input instead of a JS click.
  const touch=await page.context().newCDPSession(page);
  await touch.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
  await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:mobilePoint.x,y:mobilePoint.y}]});
  await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
- await page.waitForFunction(()=>document.querySelector('#map-detail')?.textContent.includes('Artist'));
+ await page.waitForFunction(()=>document.querySelector('#map-detail')?.textContent.includes('Velvet'));
  await touch.send('Emulation.setTouchEmulationEnabled',{enabled:false});await touch.detach();
- assert.match(await page.locator('#map-detail').textContent(),/Artist.*Aurora/);
+ assert.match(await page.locator('#map-detail').textContent(),/Artist.*Velvet.*33.33% of Library/);
  await page.screenshot({path:'artifacts/library-map-mobile.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('.library-map>summary').click();assert.equal(await page.locator('#library-map').getAttribute('open'),null);
