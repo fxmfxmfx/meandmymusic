@@ -29,6 +29,7 @@ def test_manual_copy_keeps_audio_tags_artwork_and_empty_directories(auth, settin
     target = settings.library/'Offline Artist/Offline Album'
     assert {p.relative_to(target).as_posix():fingerprint(p) for p in target.rglob('*') if p.is_file()} == original
     assert (target/'Empty').is_dir() and album.exists()
+    assert target.stat().st_mode & 0o005 == 0o005, 'Navidrome must be able to read and traverse the copied album folder'
     assert Item.from_path(str(target/'01.wav')).title == 'Original title'
     entry = auth.get('/api/files',params={'root':'inbox'}).json()['entries'][0]
     assert entry['processing']['imported']

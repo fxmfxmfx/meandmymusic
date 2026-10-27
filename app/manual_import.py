@@ -81,6 +81,9 @@ def apply_manual(settings, plan):
                     raise ValueError('Source file changed during copying. Create a new preview.')
             if snapshot(settings, plan['source'], audio_only=False)[0] != plan['inbox_snapshot']:
                 raise ValueError('Inbox folder changed during copying. Create a new preview.')
+            # mkdtemp starts at 0700; published album folders must be readable
+            # by the separate Navidrome user, just like normal Library folders.
+            stage.chmod(0o755)
             with catalog_transaction(lib):
                 if items:
                     lib.add_album(items)
