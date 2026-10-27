@@ -9,6 +9,9 @@ another music server.
 - Browse Library and Inbox, filter files, inspect tags and play supported audio.
 - Drop files or folders from your computer into either section, or use Upload →
   Files / Folder. Nested paths are retained; existing files are never overwritten.
+- Add an Inbox album directly to a chosen Library folder without MusicBrainz.
+  The graphical picker can create artist folders and change the album folder name.
+  Manual copies retain all files, artwork, existing tags and nested folders.
 - Inbox shows Matched, Needs review and Imported badges. Match all queues album
   folders under the current location; each result still requires import approval.
 - Create folders, rename, move and delete files or whole folders in either section.
@@ -183,6 +186,14 @@ Navidrome sees imports on its next scan. Automatic scan triggering is not includ
 
 **Downloads → Clear finished** removes succeeded, failed and cancelled transfer
 records from slskd. Files in Inbox and active transfers stay in place.
+
+**Inbox → Add to Library** copies a selected folder to a destination chosen in
+Library, without any MusicBrainz request or metadata rewrite. Create an artist
+folder in the picker if needed, choose the album folder name and review the copy
+preview. The destination album folder must not exist; it is published without
+replacing existing content. Audio files are cataloged with their existing tags;
+manual import does not claim a MusicBrainz match. Optional Inbox cleanup is also
+shown and confirmed in this preview.
 
 **Inbox → Match all** discovers album folders recursively under the current
 location, grouping CD1/CD2 folders as one album. It queues up to 200 albums and

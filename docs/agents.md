@@ -22,6 +22,7 @@ filesystem access or SSH to the music server. Configure `MMM_URL` and
 | `clear-downloads` | Clear finished download records; keep files |
 | `releases QUERY` | Text search for MusicBrainz editions |
 | `preview INBOX_PATH --release RELEASE_UUID [--wait]` | Match an exact edition and preview changes |
+| `preview-copy INBOX_PATH --destination LIBRARY_PATH [--wait]` | Preview an as-is folder copy without MusicBrainz |
 | `apply PLAN_UUID [--wait]` | Apply a reviewed plan by copying and tagging |
 | `match-all [INBOX_PATH]` | Queue album matching; review results before import |
 | `jobs` / `job JOB_UUID [--wait]` | Background task status |
@@ -118,3 +119,13 @@ Every request uses normal session authentication and request protection. Folder
 paths are relative to the chosen destination, never operating-system paths.
 Conflicts and invalid paths fail without overwriting existing files. Library
 uploads do not automatically tag or add entries to the beets catalog.
+
+`POST /api/imports/manual-preview` accepts Inbox `path` and relative Library
+`destination` (including the new album folder name). Its ready preview has
+`mode: "manual"` and is applied through the same `/api/imports/ID/apply` endpoint.
+It preserves all source file bytes, tags, artwork and empty directories. It never
+queries MusicBrainz. Existing destinations, changed sources and unsafe paths are
+rejected; optional cleanup requires the same reviewed deletion choice.
+
+`GET /api/jobs` provides summaries, all pending reviews/active work and recent
+terminal tasks. `GET /api/jobs/ID` returns the full result/preview for review.

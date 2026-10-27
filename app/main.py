@@ -25,6 +25,7 @@ from app.files import AUDIO, audio_metadata, list_directory, move, delete, opera
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
 from app.uploads import Uploads
+from app.manual_import import preview_manual, apply_manual
 from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths, update_inbox_paths
 from app.inbox import annotate as annotate_inbox, snapshot, album_paths, imported_sources
 
@@ -70,6 +71,11 @@ class AlbumMatch(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     artist: str | None = Field(default=None, max_length=300)
     album: str | None = Field(default=None, max_length=300)
+
+
+class ManualImport(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    destination: str = Field(min_length=1, max_length=4096)
 
 
 class MatchAll(BaseModel):
@@ -187,6 +193,12 @@ def create_app(settings=None):
             'tracks': len(result['rows']), 'has_tags': True, 'candidates': [], 'warnings': []}
         match['selected_release_id'] = release_id
         result['match_signature'], result['match_result'] = digest, match
+        return result
+
+    def prepare_manual(settings, source, destination):
+        delete_source = store.preferences()['delete_inbox_after_import']
+        result = preview_manual(settings, source, destination)
+        result['delete_source'] = delete_source
         return result
 
     def perform_match(settings, source, artist=None, album=None):
@@ -499,6 +511,12 @@ def create_app(settings=None):
         safe_path(settings.inbox, data.path, allow_root=False)
         return run_job("preview", prepare_preview, data.path, str(data.release_id), job_source=data.path)
 
+    @app.post('/api/imports/manual-preview')
+    def manual_preview(data: ManualImport):
+        safe_path(settings.inbox, data.path, allow_root=False)
+        safe_path(settings.library, data.destination, exists=False, allow_root=False)
+        return run_job('preview', prepare_manual, data.path, data.destination, job_source=data.path)
+
     @app.post('/api/musicbrainz/match-all')
     def match_all(data: MatchAll):
         with operation_lock:
@@ -547,11 +565,18 @@ def create_app(settings=None):
             raise HTTPException(409, 'Import cleanup setting changed. Create a new preview before importing.')
         if not store.claim_plan(str(plan_id)):
             raise HTTPException(409, "This preview is already in use")
-        return run_job("import", apply_import, result, plan_id=str(plan_id), job_source=result['source'])
+        return run_job("import", apply_manual if result.get("mode") == "manual" else apply_import, result, plan_id=str(plan_id), job_source=result['source'])
 
     @app.get("/api/jobs")
     def jobs():
-        return store.jobs()
+        jobs = store.jobs()
+        for job in jobs:
+            if job['result']:
+                value = job['result']
+                job['result'] = {key:value[key] for key in ('album','artist','mode','files','cleanup','preview_error') if key in value}
+                if job['kind'] == 'match':
+                    job['result'].update({key:value.get('match',{}).get(key,'') for key in ('album','artist')})
+        return jobs
 
     @app.delete("/api/jobs")
     def clear_jobs():

@@ -220,6 +220,7 @@ test('system file drop and folder picker upload real files into Library and Inbo
  assert.equal(await fs.readFile(path.join(directory,'inbox/Local Album/CD1/One.flac'),'utf8'),'original local audio');
  assert.equal(await fs.readFile(path.join(directory,'inbox/Local Album/cover.jpg'),'utf8'),'local cover');
  await page.locator('[data-nav="library"]').click();
+ await page.locator('.browser').waitFor();
  await page.evaluate(()=>{
   const data=new DataTransfer();data.items.add(new File(['dropped audio'],'Dropped.flac',{type:'audio/flac'}));
   document.querySelector('.browser').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data}));
@@ -263,5 +264,27 @@ test('Inbox match badges, Match all task review and cleanup preference survive r
  await page.setViewportSize({width:390,height:844});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.screenshot({path:'artifacts/inbox-matched-mobile.png',fullPage:true,animations:'disabled'});
+ assert.deepEqual(errors,[]);
+});
+
+test('manual Add to Library copies an unmatched album and artwork through the folder picker without MusicBrainz',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ const lookups=[];
+ const observe=request=>{if(request.url().includes('/api/musicbrainz/'))lookups.push(request.url());};page.on('request',observe);
+ try{
+  await page.locator('[data-nav="inbox"]').click();await page.locator('[data-select="Local Album"]').click();await page.locator('[data-action="add-to-library"]').click();
+  await page.locator('.picker-create > summary').click();
+  await page.locator('#picker-new-folder input').fill('Offline Artist');await page.locator('#picker-new-folder button').click();
+  await page.locator('.picker-breadcrumbs').filter({hasText:'Offline Artist'}).waitFor();
+  await page.locator('#manual-album-name').fill('Offline Album');await page.locator('[data-action="confirm-manual"]').click();
+  await page.locator('[data-apply-plan]').waitFor();
+  assert.match(await page.locator('.plan-banner').textContent(),/kept as-is.*No MusicBrainz/);
+  await page.screenshot({path:'artifacts/manual-import-preview.png',fullPage:true,animations:'disabled'});
+  await page.locator('[data-apply-plan]').click();await waitForFile('music/Offline Artist/Offline Album/CD1/One.flac');await page.locator('#modal').waitFor({state:'hidden'});
+  assert.equal(await fs.readFile(path.join(directory,'music/Offline Artist/Offline Album/CD1/One.flac'),'utf8'),'original local audio');
+  assert.equal(await fs.readFile(path.join(directory,'music/Offline Artist/Offline Album/cover.jpg'),'utf8'),'local cover');
+  assert.equal(await exists('inbox/Local Album'),false,'Reviewed cleanup option should remove the Inbox source');
+  assert.equal(lookups.length,0);
+ }finally{page.off('request',observe);}
  assert.deepEqual(errors,[]);
 });

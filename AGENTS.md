@@ -112,9 +112,14 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   Settings and shown in the reviewed preview, naming the folder and all contents.
   Delete only after files and catalog commit succeed. Changed folders stay; a
   cleanup failure must not claim that the Library import failed.
+- Use `catalog_transaction` savepoints for persistent beets mutations: beets
+  2.3.1 commits its normal transaction context even if the body raises.
 - Commit Inbox import provenance with the beets catalog. Keep match caches
   separate from transient task lists, invalidate them when track snapshots change,
   and distinguish weak suggestions from an identified album.
+- Manual Add to Library copies bytes and nested folders as-is, without a
+  MusicBrainz call or tag rewrite. Do not label manual copies as matched.
+  Publish the new album folder exclusively and roll back catalog rows on failure.
 - Match all runs sequential jobs, groups disc folders and never auto-imports.
   Cancellation and cache publication must be one database transaction.
 - System drops upload new files; internal drags move existing archive items.

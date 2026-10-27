@@ -7,6 +7,7 @@ import tempfile
 import time
 import unicodedata
 from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 
 from beets import autotag
@@ -32,6 +33,21 @@ def fingerprint(path):
 
 def library(settings):
     return Library(str(settings.state / "beets.db"), directory=str(settings.library), path_formats=[("default", PATH_FORMAT)])
+
+
+@contextmanager
+def catalog_transaction(lib):
+    # beets 2.3.1's transaction manager commits even when its body raises.
+    # A savepoint supplies rollback while retaining beets' connection/locking API.
+    with lib.transaction() as transaction:
+        transaction.query('SAVEPOINT mmm_catalog_change')
+        try:
+            yield
+        except BaseException:
+            transaction.query('ROLLBACK TO SAVEPOINT mmm_catalog_change')
+            raise
+        finally:
+            transaction.query('RELEASE SAVEPOINT mmm_catalog_change')
 
 
 def album_items(settings, source):
@@ -147,7 +163,7 @@ def remove_catalog_paths(settings, source):
     if not (settings.state / "beets.db").exists():
         return
     lib = library(settings)
-    with lib.transaction():
+    with catalog_transaction(lib):
         for item in lib.items():
             path = Path(os.fsdecode(item.path))
             if path == source or path.is_relative_to(source):
@@ -242,7 +258,7 @@ def apply_import(settings, plan):
             for temp, (_, _, dst) in zip(staged, checked):
                 os.link(temp, dst)
                 published.append(dst)
-            with lib.transaction():
+            with catalog_transaction(lib):
                 lib.add_album(items)
         except Exception:
             for dst in published:
@@ -251,21 +267,23 @@ def apply_import(settings, plan):
         finally:
             for temp in staged:
                 temp.unlink(missing_ok=True)
-        cleanup = {'status': 'kept', 'source': plan['source']}
-        if plan.get('delete_source'):
-            # Publishing and catalog commit have succeeded. Cleanup must never
-            # turn a successful import into a failed job or roll back good copies.
-            try:
-                if snapshot(settings, plan['source'], audio_only=False)[0] != plan.get('inbox_snapshot'):
-                    cleanup = {**cleanup, 'status': 'skipped', 'message': 'Inbox folder changed after preview; originals were kept.'}
-                else:
-                    folder = safe_path(settings.inbox, plan['source'], allow_root=False)
-                    shutil.rmtree(folder)
-                    cleanup['status'] = 'deleted'
-            except Exception:
-                cleanup = {**cleanup, 'status': 'failed', 'message': 'Import succeeded, but Inbox cleanup could not finish. Check the source folder and permissions.'}
         return {"album": plan["album"], "artist": plan["artist"], "files": len(items),
-                "destinations": [row["destination"] for row in plan["rows"]], "cleanup": cleanup}
+                "destinations": [row["destination"] for row in plan["rows"]], "cleanup": cleanup_inbox(settings, plan)}
+
+
+def cleanup_inbox(settings, plan):
+    cleanup = {'status': 'kept', 'source': plan['source']}
+    if plan.get('delete_source'):
+        # Copying and catalog commit have already succeeded.
+        try:
+            if snapshot(settings, plan['source'], audio_only=False)[0] != plan.get('inbox_snapshot'):
+                return {**cleanup, 'status': 'skipped', 'message': 'Inbox folder changed after preview; originals were kept.'}
+            folder = safe_path(settings.inbox, plan['source'], allow_root=False)
+            shutil.rmtree(folder)
+            cleanup['status'] = 'deleted'
+        except Exception:
+            cleanup = {**cleanup, 'status': 'failed', 'message': 'Import succeeded, but Inbox cleanup could not finish. Check the source folder and permissions.'}
+    return cleanup
 
 
 def update_inbox_paths(settings, source, destination):
@@ -273,7 +291,7 @@ def update_inbox_paths(settings, source, destination):
     if not (settings.state / 'beets.db').exists():
         return
     lib = library(settings)
-    with lib.transaction():
+    with catalog_transaction(lib):
         for item in lib.items():
             if not item.get(PROVENANCE):
                 continue
@@ -292,7 +310,7 @@ def update_catalog_paths(settings, source, destination):
     if not (settings.state / "beets.db").exists():
         return
     lib = library(settings)
-    with lib.transaction():
+    with catalog_transaction(lib):
         for item in lib.items():
             old = Path(os.fsdecode(item.path))
             if old == source or old.is_relative_to(source):

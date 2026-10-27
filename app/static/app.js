@@ -106,7 +106,7 @@ function renderFiles(){
 }
 function renderFileActions(){
  const el=document.querySelector('#file-actions');if(!el)return;const disabled=state.selected?'':'disabled';
- el.innerHTML=`<button class="small" data-action="rename" ${disabled}>${icon('edit')}Rename</button><button class="small" data-action="move" ${disabled}>${icon('move')}Move</button><button class="small danger" data-action="delete" ${disabled}>${icon('trash')}Delete</button>${root()==='inbox'?`<button class="small" data-action="match" ${state.selected?.directory?'':'disabled'}>${icon('disc')}Match album</button>`:''}<span class="selection-name">${esc(state.selected?.name||'Select an item')}</span>`;
+ el.innerHTML=`<button class="small" data-action="rename" ${disabled}>${icon('edit')}Rename</button><button class="small" data-action="move" ${disabled}>${icon('move')}Move</button><button class="small danger" data-action="delete" ${disabled}>${icon('trash')}Delete</button>${root()==='inbox'?`<button class="small" data-action="match" ${state.selected?.directory?'':'disabled'}>${icon('disc')}Match album</button><button class="small" data-action="add-to-library" ${state.selected?.directory?'':'disabled'}>${icon('inbox')}Add to Library</button>`:''}<span class="selection-name">${esc(state.selected?.name||'Select an item')}</span>`;
 }
 function breadcrumbs(){
  const chunks=state.path?state.path.split('/'):[];
@@ -119,8 +119,8 @@ function processingBadges(entry){
  else if(status.imported_files)labels.push(`<span class="badge processing-imported">Imported ${status.imported_files}/${status.audio_files}</span>`);
  if(status.match==='matched')labels.push('<span class="badge processing-matched">Matched</span>');
  else if(status.match==='partial')labels.push(`<span class="badge processing-matched">Matched ${status.matched_files}/${status.audio_files}</span>`);
- else if(status.match==='review')labels.push('<span class="badge warm">Needs review</span>');
- else if(status.match==='none')labels.push('<span class="badge">No match</span>');
+ else if(status.match==='review'&&!status.imported)labels.push('<span class="badge warm">Needs review</span>');
+ else if(status.match==='none'&&!status.imported)labels.push('<span class="badge">No match</span>');
  return labels.length?`<span class="processing-badges">${labels.join('')}</span>`:'';
 }
 function renderFileList(){
@@ -330,14 +330,18 @@ async function watchJob(id){
  if(state.page==='jobs')loadJobs().catch(()=>{});
 }
 function renderPlan(job){
- const plan=job.kind==='match'?job.result.plan:job.result, weak=plan.confidence<90;
- showModal('Import preview',`<div class="plan-banner${weak?' warning':''}"><strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library. ${plan.delete_source?`<div class="cleanup-warning"><strong>After import, permanently delete Inbox/${esc(plan.source)} and everything inside it, including artwork and other files.</strong></div>`:'Original files remain in Inbox.'}</div>${plan.rows.map(row=>`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('')}<p class="field-help">Preview valid for one hour. Artwork and non-audio files are not copied automatically.</p>`,`<button data-cancel-job="${esc(job.id)}">Reject</button><button data-match-again="${esc(plan.source)}">Back</button><button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}${plan.delete_source?'Import & delete Inbox folder':'Import album'}</button>`);modal.dataset.jobId=job.id;
+ const plan=job.kind==='match'?job.result.plan:job.result,manual=plan.mode==='manual',weak=!manual&&plan.confidence<90;
+ const banner=manual?`<strong>${esc(plan.album)}</strong><br>Copy ${plan.rows.length} files to <code>Library/${esc(plan.destination)}</code>.<br>Files, artwork and existing tags are kept as-is. No MusicBrainz lookup.`:`<strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library.`;
+ const cleanup=plan.delete_source?`<div class="cleanup-warning"><strong>After import, permanently delete Inbox/${esc(plan.source)} and everything inside it, including artwork and other files.</strong></div>`:'<br>Original files remain in Inbox.';
+ const rows=plan.rows.map(row=>manual?`<div class="plan-track"><span class="muted">${icon(row.audio?'music':'file')}${esc(row.source)}</span><code>${esc(row.destination)}</code></div>`:`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('');
+ showModal(manual?'Add to Library':'Import preview',`<div class="plan-banner${weak?' warning':''}">${banner}${cleanup}</div>${rows}<p class="field-help">Preview valid for one hour.${manual?'':' Artwork and non-audio files are not copied automatically.'}</p>`,`<button data-cancel-job="${esc(job.id)}">Reject</button>${manual?`<button data-manual-back="${esc(plan.source)}" data-manual-target="${esc(plan.destination)}">Back</button>`:`<button data-match-again="${esc(plan.source)}">Back</button>`}<button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}${plan.delete_source?'Import & delete Inbox folder':manual?'Add to Library':'Import album'}</button>`);modal.dataset.jobId=job.id;
 }
+
 function diffTags(tags){return [['Track',tags.title],['Artist',tags.artist],['Album',tags.album],['Year',tags.year||'—'],['Track number',`${tags.disc||1}.${tags.track||'—'} / ${tags.tracktotal||'—'}`]].map(([key,value])=>`<dt>${key}</dt><dd>${esc(value||'—')}</dd>`).join('');}
 const statusLabels={queued:'Queued',running:'Running',ready:'Ready for review',done:'Done',applied:'Applied',applying:'Importing',failed:'Error',interrupted:'Interrupted',cancelled:'Cancelled',expired:'Expired'};
 async function loadJobs(){
  const jobs=await api('/jobs');state.jobs=jobs;if(state.page!=='jobs')return;
- document.querySelector('#content').innerHTML=heading('05','Tasks','',`<button data-action="clear-jobs" ${jobs.some(j=>['done','applied','failed','interrupted','cancelled','expired'].includes(j.status))?'':'disabled'}>${icon('trash')}Clear finished</button>`)+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='match'?'Match album':job.kind==='preview'?'Match and preview':'Import to Library'}${job.source?` · ${esc(job.source)}`:''}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}${job.result?.cleanup?.status==='deleted'?' · Inbox folder deleted':''}${job.result?.cleanup?.message?`<br>${esc(job.result.cleanup.message)}`:''}${job.result?.preview_error?`<br>${esc(job.result.preview_error)}`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted','expired'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${['preview','match'].includes(job.kind)&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Review</button>`:''}${['preview','match'].includes(job.kind)&&['queued','running','ready'].includes(job.status)?`<button class="small" data-cancel-job="${esc(job.id)}">${job.status==='ready'?'Reject':'Cancel'}</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
+ document.querySelector('#content').innerHTML=heading('05','Tasks','',`<button data-action="clear-jobs" ${jobs.some(j=>['done','applied','failed','interrupted','cancelled','expired'].includes(j.status))?'':'disabled'}>${icon('trash')}Clear finished</button>`)+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='match'?'Match album':job.kind==='preview'?(job.result?.mode==='manual'?'Copy preview':'Match and preview'):'Import to Library'}${job.source?` · ${esc(job.source)}`:''}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}${job.result?.cleanup?.status==='deleted'?' · Inbox folder deleted':''}${job.result?.cleanup?.message?`<br>${esc(job.result.cleanup.message)}`:''}${job.result?.preview_error?`<br>${esc(job.result.preview_error)}`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted','expired'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${['preview','match'].includes(job.kind)&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Review</button>`:''}${['preview','match'].includes(job.kind)&&['queued','running','ready'].includes(job.status)?`<button class="small" data-cancel-job="${esc(job.id)}">${job.status==='ready'?'Reject':'Cancel'}</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
 }
 const historyTitles={upload:'Files uploaded',move:'Moved / renamed',mkdir:'Folder created',delete:'Deleted',import:'Album imported',download:'Download queued'};
 async function loadHistory(){state.history=await api('/history');if(state.page==='history')renderHistory();}
@@ -348,7 +352,7 @@ function renderHistory(){
  const events=state.history.filter(e=>state.historyFilter==='all'||e.kind===state.historyFilter),days=new Map();
  for(const event of events){const day=new Date(event.created*1000).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});if(!days.has(day))days.set(day,[]);days.get(day).push(event);}
  document.querySelector('#history-timeline').innerHTML=events.length?[...days].map(([day,items])=>`<section class="history-day"><h2>${esc(day)}</h2><ol class="history-timeline">${items.map(event=>{
-  const d=event.data,kind=event.kind,detail=kind==='move'?`<span class="history-path">${esc(d.source)}</span>${icon('arrow')}<span class="history-path">${esc(d.destination)}</span>`:['mkdir','delete'].includes(kind)?`<span class="history-path">${esc(d.path)}</span>`:kind==='upload'?`${d.root==='inbox'?'Inbox':'Library'}/${esc(d.path||'')}<span class="muted"> · ${esc(d.files)} files</span>`:kind==='import'?`${esc(d.artist)} — ${esc(d.album)}<span class="muted"> · ${esc(d.files)} files</span>`:`${esc(d.username)}<span class="muted"> · ${esc(d.files)} files</span>`;
+  const d=event.data,kind=event.kind,detail=kind==='move'?`<span class="history-path">${esc(d.source)}</span>${icon('arrow')}<span class="history-path">${esc(d.destination)}</span>`:['mkdir','delete'].includes(kind)?`<span class="history-path">${esc(d.path)}</span>`:kind==='upload'?`${d.root==='inbox'?'Inbox':'Library'}/${esc(d.path||'')}<span class="muted"> · ${esc(d.files)} files</span>`:kind==='import'?`${d.artist?esc(d.artist)+' — ':''}${esc(d.album)}<span class="muted"> · ${esc(d.files)} files</span>`:`${esc(d.username)}<span class="muted"> · ${esc(d.files)} files</span>`;
   return `<li class="history-event${event.undone?' undone':''}"><span class="history-marker">${icon(({upload:'upload',move:'move',mkdir:'folder',delete:'trash',import:'disc',download:'download'})[kind]||'history')}</span><time datetime="${new Date(event.created*1000).toISOString()}">${new Date(event.created*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</time><div class="history-body"><div class="history-title"><strong>${esc(historyTitles[kind]||kind)}</strong>${d.root?`<span class="badge">${d.root==='inbox'?'Inbox':'Library'}</span>`:''}${event.undone?'<span class="badge">Undone</span>':''}</div><div class="history-detail">${detail}</div></div>${!event.undone&&['move','mkdir'].includes(kind)?`<button class="small quiet" data-undo="${esc(event.id)}">${icon('history')}Undo</button>`:''}</li>`;
  }).join('')}</ol></section>`).join(''):'<div class="empty"><h3>No operations</h3><p>File operations and queued downloads will appear here.</p></div>';
 }
@@ -379,20 +383,38 @@ function playFile(path){
  document.querySelector('#player-slot').innerHTML=`<section class="player" aria-label="Player"><div class="player-title">${icon('disc')}<div><strong>${esc(entry?.name||basename(path))}</strong><small>Library audio</small></div></div><audio id="audio-player" controls autoplay src="${esc(mediaURL(path))}"></audio><button class="quiet icon-button" data-action="close-player" aria-label="Close player">${icon('close')}</button></section>`;
  const player=document.querySelector('#audio-player');player.addEventListener('error',()=>toast('Your browser cannot play this audio format.',true));player.play().catch(()=>{});
 }
-document.addEventListener('input',event=>{if(event.target.id==='file-filter'){state.filter=event.target.value;renderFileList();}});
+document.addEventListener('input',event=>{if(event.target.id==='manual-album-name'){state.manualAlbumName=event.target.value;updateManualDestination();}if(event.target.id==='file-filter'){state.filter=event.target.value;renderFileList();}});
 document.addEventListener('dblclick',event=>{const row=event.target.closest('[data-select]');if(!row)return;const entry=state.entries.find(e=>e.path===row.dataset.select);if(entry?.directory)openFolder(entry.path).catch(error=>toast(error.message,true));else if(entry?.audio)playFile(entry.path);});
 document.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('tr[data-select]')){selectFile(event.target.dataset.select);}});
+function manualImportDialog(path,destination=''){
+ const entry=path?{path,name:basename(path),directory:true}:state.selected;
+ if(!entry?.directory||(!path&&root()!=='inbox'))return;
+ state.moveSource={...entry,root:'library',mode:'import'};state.manualAlbumName=destination?basename(destination):entry.name;
+ openMovePicker(destination?destination.split('/').slice(0,-1).join('/'):'').catch(error=>toast(error.message,true));
+}
+function updateManualDestination(){
+ const name=state.manualAlbumName,valid=Boolean(name)&&!['.','..'].includes(name)&&!/[\\/]/.test(name)&&!state.pickerEntries.some(entry=>entry.name===name);
+ const button=modal.querySelector('[data-action="confirm-manual"]');if(button)button.disabled=!valid;
+ const label=modal.querySelector('#manual-destination');if(label)label.textContent='Library/'+join(state.moveDestination,name);
+}
 async function openMovePicker(path){
- const source=state.moveSource;if(!source)return;
+ const source=state.moveSource;if(!source)return;const manual=source.mode==='import';
  const generation=state.pickerGeneration=(state.pickerGeneration||0)+1;
  const data=await api(`/files?${query({root:source.root,path})}`);
  if(generation!==state.pickerGeneration)return;
- state.moveDestination=data.path==='.'?'':data.path;
+ state.moveDestination=data.path==='.'?'':data.path;state.pickerEntries=data.entries;
  const destination=state.moveDestination,chunks=destination?destination.split('/'):[];
  const crumbs=`<button class="quiet" data-picker-path="">${source.root==='inbox'?'Inbox':'Library'}</button>`+chunks.map((name,i)=>`<span>/</span><button class="quiet" data-picker-path="${esc(chunks.slice(0,i+1).join('/'))}">${esc(name)}</button>`).join('');
- const dirs=data.entries.filter(entry=>entry.directory&&entry.path!==source.path&&!entry.path.startsWith(source.path+'/'));
+ const dirs=data.entries.filter(entry=>entry.directory&&(manual||(entry.path!==source.path&&!entry.path.startsWith(source.path+'/'))));
  const valid=join(destination,source.name)!==source.path&&!(source.directory&&(destination===source.path||destination.startsWith(source.path+'/')));
- showModal('Move '+esc(source.name),`<div class="breadcrumbs picker-breadcrumbs">${crumbs}</div><div class="folder-picker">${destination?`<button data-picker-path="${esc(chunks.slice(0,-1).join('/'))}">${icon('arrow')}<span>Parent folder</span></button>`:''}${dirs.map(entry=>`<button data-picker-path="${esc(entry.path)}">${icon('folder')}<span>${esc(entry.name)}</span>${icon('arrow')}</button>`).join('')}${!dirs.length?'<p class="field-help">No subfolders</p>':''}</div>`,`<button data-action="close-modal">Cancel</button><button class="primary" data-action="confirm-move" ${valid?'':'disabled'}>Move here</button>`);
+ const manualForm=manual?`<p class="field-help">Choose a parent folder in Library. The album folder will be copied with its files, artwork and existing tags.</p><label for="manual-album-name">Album folder name</label><input id="manual-album-name" value="${esc(state.manualAlbumName)}" maxlength="255"><code class="manual-destination" id="manual-destination"></code><details class="picker-create"><summary>${icon('plus')}New folder</summary><form id="picker-new-folder" class="search-form"><input name="folder" required maxlength="255" placeholder="New folder name" aria-label="New Library folder name"><button type="submit">Create</button></form></details>`:'';
+ showModal(manual?'Add to Library':'Move '+esc(source.name),`<div class="breadcrumbs picker-breadcrumbs">${crumbs}</div>${manualForm}<div class="folder-picker">${destination?`<button data-picker-path="${esc(chunks.slice(0,-1).join('/'))}">${icon('arrow')}<span>Parent folder</span></button>`:''}${dirs.map(entry=>`<button data-picker-path="${esc(entry.path)}">${icon('folder')}<span>${esc(entry.name)}</span>${icon('arrow')}</button>`).join('')}${!dirs.length?'<p class="field-help">No subfolders</p>':''}</div>`,`<button data-action="close-modal">Cancel</button>${manual?'<button class="primary" data-action="confirm-manual">Preview copy</button>':`<button class="primary" data-action="confirm-move" ${valid?'':'disabled'}>Move here</button>`}`);
+ if(manual)updateManualDestination();
+}
+async function confirmManual(button){
+ const source=state.moveSource;button.disabled=true;
+ const job=await api('/imports/manual-preview',{method:'POST',body:{path:source.path,destination:join(state.moveDestination,state.manualAlbumName)}});
+ showModal('Preparing copy',`<div class="loading"><span class="spinner"></span>Checking files and destination…</div><p>Original tags and artwork will be retained.</p>`,`<button data-cancel-job="${esc(job.id)}">Cancel task</button>`);modal.dataset.jobId=job.id;watchJob(job.id);
 }
 async function confirmMove(button){
  const source=state.moveSource,destination=join(state.moveDestination,source.name);button.disabled=true;
@@ -533,6 +555,7 @@ document.addEventListener('click',async event=>{
   if(button.dataset.downloadTree){event.preventDefault();button.disabled=true;const node=state.searchNodes.get(button.dataset.downloadTree);if(node)await downloadFiles(node,node.files);return;}
   if(button.dataset.downloadFile){event.preventDefault();button.disabled=true;const [g,f]=button.dataset.downloadFile.split(':').map(Number);await downloadFiles(state.groups[g],[state.groups[g].files[f]]);return;}
   if(button.dataset.cancelId){button.disabled=true;await api(`/soulseek/downloads/${encodeURIComponent(button.dataset.cancelUser)}/${button.dataset.cancelId}`,{method:'DELETE'});await loadTransfers(true);return;}
+  if(button.hasAttribute('data-manual-back')){manualImportDialog(button.dataset.manualBack,button.dataset.manualTarget);return;}
   if(button.hasAttribute('data-match-again')){matchDialog(button.dataset.matchAgain,false);return;}
   if(button.dataset.release){button.disabled=true;await makePreview(button.dataset.release);return;}
   if(button.dataset.applyPlan){button.disabled=true;const job=await api(`/imports/${button.dataset.applyPlan}/apply`,{method:'POST'});showModal('Importing album',`<div class="loading"><span class="spinner"></span>Writing tags and copying files…</div><p>You can close this window and follow progress in Tasks.</p>`);modal.dataset.jobId=job.id;watchJob(job.id);return;}
@@ -548,6 +571,8 @@ document.addEventListener('click',async event=>{
   else if(action==='upload-files'){button.closest('details').open=false;document.querySelector('#upload-files-input').click();}
   else if(action==='upload-folder'){button.closest('details').open=false;const input=document.querySelector('#upload-folder-input');if('webkitdirectory' in input)input.click();else toast('This browser cannot select folders. Try dragging a folder from your desktop.',true);}
   else if(action==='cancel-upload'){if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();if(modal.dataset.upload==='active')modal.close();}}
+  else if(action==='add-to-library')manualImportDialog();
+  else if(action==='confirm-manual')await confirmManual(button);
   else if(action==='match')matchDialog();
   else if(action==='match-all'){button.disabled=true;const result=await api('/musicbrainz/match-all',{method:'POST',body:{path:state.path}});toast(`${result.queued} albums queued. ${result.skipped_imported} imported · ${result.skipped_matched} already matched · ${result.active} already queued.`);if(result.queued||result.active)await navigate('jobs');else await loadFiles();}
   else if(action==='close-modal')modal.close();
@@ -579,6 +604,7 @@ document.addEventListener('submit',async event=>{
    try{const result=await api(`/soulseek/auth/${mode}`,{method:'POST',body});if(result.logged_in!==true)throw new Error('The server did not confirm login');toast(result.message||'Soulseek login confirmed.');}
    finally{state.accountBusy=false;form.querySelectorAll('input[type="password"]').forEach(input=>input.value='');await refreshAccount();}
   }
+  else if(form.id==='picker-new-folder'){const name=String(values.get('folder')).trim();if(!name||['.','..'].includes(name)||/[\\/]/.test(name))throw new Error('Enter a folder name without path separators');const path=join(state.moveDestination,name);await api('/folders',{method:'POST',body:{root:'library',path}});await openMovePicker(path);}
   else if(form.id==='file-operation'){
    const value=String(values.get('value')).trim(),mode=form.dataset.mode;
    if(!value)throw new Error('Enter a name');

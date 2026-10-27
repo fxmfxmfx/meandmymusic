@@ -247,3 +247,18 @@ def test_competing_complete_high_scoring_editions_require_review(settings, album
         return a, b, SimpleNamespace(candidates=[first, second])
     monkeypatch.setattr("app.tagger.autotag.tag_album", matcher)
     assert match_album(settings, "Test Album")["recommended_release_id"] is None
+
+
+def test_catalog_exception_rolls_back_published_files_and_partial_database_writes(settings, album, match, monkeypatch):
+    from beets.library import Library
+    plan = preview(settings, 'Test Album', RELEASE)
+    original = Library.add_album
+    def fail_after_insert(self, items):
+        original(self,items)
+        raise OSError('catalog operation failed after inserting rows')
+    monkeypatch.setattr(Library,'add_album',fail_after_insert)
+    with pytest.raises(OSError):
+        apply_import(settings,plan)
+    assert not list(library(settings).items())
+    assert not list(settings.library.rglob('*.wav'))
+    assert len(list(album.glob('*.wav'))) == 2

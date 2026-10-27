@@ -25,6 +25,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
       before:{title:'Old title', artist:'Unknown'}, after:{title:'Correct title', artist:'Test Artist',album:'Test Album',year:2026,disc:1,track:1,tracktotal:1}}]}};
   let transfers=scenario.transfers||[], jobs=[plan], events=scenario.events||[], preferences={delete_inbox_after_import:Boolean(scenario.cleanup)};
   if(scenario.cleanup){plan.result.delete_source=true;plan.result.source='Album';}
+  if(scenario.manual){plan.result.mode='manual';plan.result.source='Artist <script>';plan.result.destination='Second Artist/Offline Album';}
   if(scenario.matchJob){plan.kind='match';plan.source='Artist <script>';plan.result={source:plan.source,plan:plan.result};}
   let entries = scenario.entries||[folder('Artist <script>'), folder('Second Artist'), file('Song.wav')];
   let account = {managed:true,api_reachable:true,logged_in:false,saved:false,busy:false,error:null};
@@ -54,6 +55,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     else if(path.pathname==='/api/jobs'){if(method==='DELETE'){const finished=jobs.filter(j=>!['queued','running','ready','applying'].includes(j.status));jobs=jobs.filter(j=>!finished.includes(j));result={cleared:finished.length};}else result=jobs;}
     else if(path.pathname===`/api/jobs/${planId}/cancel`){if(scenario.cancelFailure){status=409;result={detail:'Task already applying'};}else{plan.status='cancelled';plan.result=null;result={ok:true};}}
     else if(path.pathname==='/api/musicbrainz/match') result={artist:body.artist??'Tagged Artist',album:body.album??'Tagged Album',tracks:2,has_tags:true,candidates:[{id:release,artist:'Tagged Artist',title:'Tagged Album',tracks:2,confidence:98,extra_files:0,missing_tracks:0}],...matchOverrides};
+    else if(path.pathname==='/api/imports/manual-preview')result={id:planId};
     else if(path.pathname==='/api/imports/preview') result={id:planId};
     else if(path.pathname===`/api/jobs/${planId}`) result=plan;
     else if(path.pathname===`/api/imports/${planId}/apply`) result={id:'import-job'};
@@ -428,6 +430,22 @@ test('folder drop reader retains nested and empty folders and reads every page b
   assert.equal(result.files.length,102);
   assert.ok(result.files.some(file=>file.path==='Album/Disc/Nested.flac'));
   assert.deepEqual([...result.directories],['Album','Album/Empty','Album/Disc']);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('Add to Library picks a destination graphically and previews an as-is copy without MusicBrainz',async()=>{
+ const f=await fixture(true,null,{}, {manual:true});
+ try{
+  f.click('[data-nav="inbox"]');await tick();f.click('.folder-card');f.click('[data-action="add-to-library"]');await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/files'&&c.params.get('root')==='library'));
+  f.click('[data-picker-path="Second Artist"]');await tick();
+  const input=f.window.document.querySelector('#manual-album-name');input.value='Offline Album';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));
+  assert.match(f.window.document.querySelector('#manual-destination').textContent,/Library\/Second Artist\/Offline Album/);
+  f.click('[data-action="confirm-manual"]');await tick();await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/imports/manual-preview'&&c.body.path==='Artist <script>'&&c.body.destination==='Second Artist/Offline Album'));
+  assert.match(f.window.document.querySelector('.plan-banner').textContent,/kept as-is.*No MusicBrainz/);
+  assert.ok(!f.calls.some(c=>c.path.startsWith('/api/musicbrainz/')||c.path.endsWith('/apply')));
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });

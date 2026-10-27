@@ -119,7 +119,7 @@ def annotate(settings, listing, store):
         _, rows = scanned(entry['path'])
         imported = sum(1 for path, size, mtime, _ in rows if path in imports and
                        imports[path]['size'] == size and imports[path]['mtime_ns'] == mtime)
-        matched_count = sum(1 for path, size, mtime, _ in rows if path in matched or (path in imports and
+        matched_count = sum(1 for path, size, mtime, _ in rows if path in matched or (path in imports and imports[path].get('matched', True) and
                             imports[path]['size'] == size and imports[path]['mtime_ns'] == mtime))
         cache = valid.get(entry['path'])
         entry['processing'] = {'audio_files': len(rows), 'imported_files': imported,

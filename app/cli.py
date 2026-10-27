@@ -50,6 +50,10 @@ def parser():
     preview.add_argument("path")
     preview.add_argument("--release", required=True, help="MusicBrainz release UUID")
     preview.add_argument("--wait", action="store_true")
+    copy = sub.add_parser("preview-copy", help="Preview copying an Inbox folder to Library as-is, without MusicBrainz")
+    copy.add_argument("path")
+    copy.add_argument("--destination", required=True, help="Relative Library destination for the album folder")
+    copy.add_argument("--wait", action="store_true")
     apply = sub.add_parser("apply", help="Apply a reviewed preview by ID (copies, tags and catalogs files)")
     apply.add_argument("plan_id")
     apply.add_argument("--wait", action="store_true")
@@ -153,6 +157,9 @@ def execute(args, client):
         return call("GET", "/musicbrainz/releases", params={"query": args.query})
     if c == "preview":
         job = call("POST", "/imports/preview", {"path": args.path, "release_id": args.release})
+        return wait_for_job(job["id"]) if args.wait else job
+    if c == "preview-copy":
+        job = call("POST", "/imports/manual-preview", {"path": args.path, "destination": args.destination})
         return wait_for_job(job["id"]) if args.wait else job
     if c == "apply":
         job = call("POST", f"/imports/{args.plan_id}/apply")
