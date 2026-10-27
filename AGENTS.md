@@ -100,7 +100,9 @@ such as Navidrome. Finish the requested behavior across the API and UI.
 - Library duration statistics count the actual Library tree, not just beets
   imports. Keep scanning in a separate worker, cache unchanged files and exclude
   hidden staging, symlinks and unreadable durations. Show only Total library time
-  and the total duration at the Library root; keep this summary compact.
+  and the total duration at the Library root; keep this summary compact. Root
+  names are already in page headings. Show breadcrumbs only inside folders and
+  keep the file filter alongside file actions.
 
 ## Matching and import contracts
 

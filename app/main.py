@@ -138,7 +138,7 @@ def create_app(settings=None):
             uploads.close()
             library_stats.close()
 
-    app = FastAPI(title="meandmymusic", version="0.7.1", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.7.2", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
     app.state.library_stats = library_stats
@@ -251,7 +251,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.7.1"}
+        return {"status": "ok", "version": "0.7.2"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -288,7 +288,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.7.1", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.7.2", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 

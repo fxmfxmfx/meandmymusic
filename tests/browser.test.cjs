@@ -72,6 +72,13 @@ test('native drag survives breadcrumb navigation and two hover-open folders',asy
   await page.locator('#drag-file-list [data-select="Drag Test/Target"]').waitFor({timeout:5000});
   assert.equal(await source.evaluate(element=>element.isConnected),true);
   assert.equal(moves.length,0,'Hovering must never move files');
+  // Root headings replace the breadcrumb row; a native drag must survive both transitions.
+  await hover(page.locator('[data-path=""]'));
+  await page.locator('#drag-file-list [data-select="Drag Test"]').waitFor({timeout:5000});
+  assert.equal(await page.locator('.browser-toolbar .breadcrumbs').count(),0);
+  assert.equal(await source.evaluate(element=>element.isConnected),true);
+  await hover(page.locator('#drag-file-list [data-select="Drag Test"]'));
+  await page.locator('#drag-file-list [data-select="Drag Test/Target"]').waitFor({timeout:5000});
   // Revisiting the source parent is a no-op drop, but must still allow browsing.
   await hover(page.locator('#drag-file-list [data-select="Drag Test/Source"]'));
   await page.locator('[data-path="Drag Test/Source"]').waitFor({timeout:5000});
@@ -116,6 +123,10 @@ test('permanent deletion confirms the target and deletes nested Inbox contents',
  await page.locator('[data-action="delete"]').click();await page.locator('[data-action="confirm-delete"]').click();
  await page.locator('#modal').waitFor({state:'hidden'});
  assert.equal(await exists('inbox/Delete Album'),false);
+ await page.locator('#file-list .empty').waitFor();
+ assert.equal(await page.locator('.browser-toolbar').isVisible(),false);
+ assert.equal(await page.locator('.file-toolbar #file-filter').count(),1);
+ await page.screenshot({path:'artifacts/inbox-toolbar.png',fullPage:true,animations:'disabled'});
  assert.deepEqual(errors,[]);
 });
 
@@ -299,7 +310,9 @@ test('Library total time reads actual audio and stays compact on desktop and mob
  await page.locator('#library-time-value').waitFor();
  await page.evaluate(()=>loadLibraryTime(true));
  await page.waitForFunction(()=>document.querySelector('#library-time-value')?.textContent==='1 min 30 sec'&&!state.libraryStats?.scanning);
- assert.equal(await page.locator('.library-time').textContent(),'Total library time1 min 30 sec');
+ assert.equal(await page.locator('.browser-toolbar .library-time').textContent(),'Total library time1 min 30 sec');
+ assert.equal(await page.locator('.browser-toolbar .breadcrumbs').count(),0);
+ assert.equal(await page.locator('.file-toolbar #file-filter').count(),1);
  assert.equal(await page.locator('#library-map,.map-chart,#map-filter').count(),0);
  for(const theme of ['current','light','dark','gruvbox','mocha']){
   await page.evaluate(value=>applyMusicTheme(value),theme);

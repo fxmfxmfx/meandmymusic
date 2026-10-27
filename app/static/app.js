@@ -55,7 +55,7 @@ function showLogin(){
 }
 function shell(){
  state.preferenceEdited=false;
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.7.1</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.7.2</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
  api('/preferences').then(value=>{if(!document.querySelector('.shell')||state.preferenceEdited)return;state.preferences=value;const checkbox=document.querySelector('#delete-inbox-after-import');if(checkbox)checkbox.checked=value.delete_inbox_after_import;}).catch(error=>toast(error.message,true));
@@ -128,13 +128,19 @@ function renderFiles(){
   // Retain the native drag source until drop, even while browsing other folders.
   const original=document.querySelector('#file-list');original.classList.add('drag-preserved');
   if(!document.querySelector('#drag-file-list')){const layer=document.createElement('div');layer.id='drag-file-list';original.after(layer);}
-  document.querySelector('.breadcrumbs').innerHTML=breadcrumbs();document.querySelector('.browser').dataset.dropPath=state.path;
+  renderFileLocation();document.querySelector('.browser').dataset.dropPath=state.path;
+  document.querySelector('#file-filter').value=state.filter;
   renderFileList();return;
  }
  document.querySelector('#content').innerHTML=heading(inbox?'02':'01','','',`<button data-action="reload" class="icon-button" aria-label="Refresh" title="Refresh">${icon('refresh')}</button><button class="primary" data-action="new-folder">${icon('plus')} New folder</button><details class="upload-menu"><summary>${icon('upload')}Upload</summary><div><button data-action="upload-files">Files</button><button data-action="upload-folder">Folder</button></div></details>${inbox?`<button data-action="match-all">${icon('disc')}Match all</button>`:''}`)+
- `${!inbox&&!state.path?libraryTimeShell():''}<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"><div class="breadcrumbs">${breadcrumbs()}</div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div class="file-actions" id="file-actions"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
- renderFileActions();renderFileList();renderInspector();
- if(!inbox&&!state.path)renderLibraryTime();
+ `<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"></div><div class="file-toolbar"><div class="file-actions" id="file-actions"></div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
+ renderFileLocation();renderFileActions();renderFileList();renderInspector();
+}
+function renderFileLocation(){
+ const toolbar=document.querySelector('.browser>.browser-toolbar');if(!toolbar)return;
+ toolbar.hidden=!state.path&&root()==='inbox';
+ toolbar.innerHTML=state.path?`<div class="breadcrumbs">${breadcrumbs()}</div>`:root()==='library'?libraryTimeShell():'';
+ if(!state.path&&root()==='library')renderLibraryTime();
 }
 function renderFileActions(){
  const el=document.querySelector('#file-actions');if(!el)return;const disabled=state.selected?'':'disabled';

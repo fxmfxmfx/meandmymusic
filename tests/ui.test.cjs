@@ -87,7 +87,8 @@ test('login opens the archive, escaped filenames render as text, filter works', 
     assert.match(f.window.document.querySelector('h1').textContent,/Library/);
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,2);
     assert.ok(f.window.document.querySelector('.folder-name').textContent.includes('<script>'));
-    const filter=f.window.document.querySelector('#file-filter');filter.value='Second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
+    assert.equal(f.window.document.querySelector('.browser-toolbar .breadcrumbs'),null);
+    const filter=f.window.document.querySelector('.file-toolbar #file-filter');filter.value='Second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,1);
     assert.equal(f.window.document.querySelector('.folder-name').textContent,'Second Artist');
     assert.deepEqual(f.errors,[]);
@@ -455,13 +456,16 @@ test('Library shows only its total duration and refreshes through the existing b
  const f=await fixture(true,null,{}, {stats:{ready:true,scanning:false,duration:600,artists:[{name:'Hidden artist'}]}});
  try{
   const doc=f.window.document;
-  assert.equal(doc.querySelector('.library-time').textContent,'Total library time10 min');
+  assert.equal(doc.querySelector('.browser-toolbar .library-time').textContent,'Total library time10 min');
+  assert.equal(doc.querySelector('.browser-toolbar .breadcrumbs'),null);
   assert.equal(doc.querySelector('#library-map,.map-chart,#map-filter'),null);
   assert.ok(!doc.querySelector('#content').textContent.includes('Hidden artist'));
   f.click('[data-action="reload"]');await tick();
   assert.ok(f.calls.some(c=>c.path==='/api/library/stats/refresh'&&c.method==='POST'));
   f.click('[data-nav="inbox"]');await tick();
   assert.equal(doc.querySelector('.library-time'),null);
+  assert.equal(doc.querySelector('.browser-toolbar').hidden,true);
+  assert.ok(doc.querySelector('.file-toolbar #file-filter'));
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });
