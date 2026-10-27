@@ -8,6 +8,7 @@ such as Navidrome. Finish the requested behavior across the API and UI.
 
 - `app/main.py`: FastAPI routes, sessions, validation, file operations and jobs.
 - `app/files.py`: root-relative paths, directory listing, metadata and filesystem operations.
+- `app/library_stats.py`: background Library duration inventory and file metadata cache.
 - `app/accounts.py`: managed Soulseek login, configuration reload, status and reconnect.
 - `app/integrations.py`: slskd HTTP adapter and MusicBrainz requests.
 - `app/proxy.py`: shared outbound SOCKS5 configuration, preflight and beets transport.
@@ -96,6 +97,11 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   is publishing files. Keep ready-preview expiry visible to the user.
 - The app shell has no top header. Theme/session controls belong in Settings;
   Soulseek connection status belongs in the Soulseek page heading.
+- Library duration statistics count the actual Library tree, not just beets
+  imports. Keep scanning in a separate worker, cache unchanged files and exclude
+  hidden staging, symlinks and unreadable durations. The chart's artist sectors
+  fill the center; aligned album sectors form the outer ring. All percentages
+  use total Library duration, and touch/keyboard must expose the same details.
 
 ## Matching and import contracts
 

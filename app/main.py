@@ -25,6 +25,7 @@ from app.files import AUDIO, audio_metadata, list_directory, move, delete, opera
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
 from app.uploads import Uploads
+from app.library_stats import LibraryStats
 from app.manual_import import preview_manual, apply_manual
 from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths, update_inbox_paths
 from app.inbox import annotate as annotate_inbox, snapshot, album_paths, imported_sources
@@ -110,6 +111,7 @@ def create_app(settings=None):
     settings.prepare()
     store = Store(settings.state)
     uploads = Uploads(settings)
+    library_stats = LibraryStats(settings)
     soulseek = Soulseek(settings)
     account = SoulseekAccount(settings, soulseek)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beets")
@@ -134,10 +136,12 @@ def create_app(settings=None):
                 await restore_task
             worker.shutdown(wait=True)
             uploads.close()
+            library_stats.close()
 
-    app = FastAPI(title="meandmymusic", version="0.6.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.7.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
+    app.state.library_stats = library_stats
 
     @app.exception_handler(ConnectionFailure)
     async def connection_failure(request, error):
@@ -247,7 +251,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.6.0"}
+        return {"status": "ok", "version": "0.7.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -284,7 +288,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.6.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.7.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -332,6 +336,14 @@ def create_app(settings=None):
     @app.patch('/api/preferences')
     def set_preferences(data: Preferences):
         return store.set_preferences(data.model_dump())
+
+    @app.get('/api/library/stats')
+    def library_statistics():
+        return library_stats.get()
+
+    @app.post('/api/library/stats/refresh')
+    def refresh_library_statistics():
+        return library_stats.get(refresh=True)
 
     @app.get("/api/files")
     def files(root: Root = "library", path: str = ""):

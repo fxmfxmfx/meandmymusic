@@ -48,13 +48,14 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
+ clearTimeout(state.mapTimer);state.mapEpoch=(state.mapEpoch||0)+1;state.libraryStats=null;
  if(state.drag)finishDrag(false);
  clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();}clearSystemDrop();state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
  app.innerHTML=`<main class="login-screen"><div class="login-theme">${themePicker()}</div><form class="login-form" id="login-form">${brand()}<h1>Open your library</h1><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button class="primary" type="submit">Sign in ${icon('arrow')}</button><p class="login-error" id="login-error" role="alert"></p></form></main>`;
 }
 function shell(){
  state.preferenceEdited=false;
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.6</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.7</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
  api('/preferences').then(value=>{if(!document.querySelector('.shell')||state.preferenceEdited)return;state.preferences=value;const checkbox=document.querySelector('#delete-inbox-after-import');if(checkbox)checkbox.checked=value.delete_inbox_after_import;}).catch(error=>toast(error.message,true));
@@ -68,6 +69,7 @@ async function refreshAccount(render=true){
 }
 function heading(number,title,subtitle,actions=''){const titles={'01':'Library','02':'Inbox','03':'Soulseek','04':'Downloads','05':'Tasks','06':'History','07':'Settings'};return `<section class="page-heading"><h1>${titles[number]||title}</h1>${actions?`<div class="heading-actions">${actions}</div>`:''}</section>`;}
 async function navigate(page){
+ clearTimeout(state.mapTimer);state.mapEpoch=(state.mapEpoch||0)+1;
  rememberTree('search');rememberTree('transfers');state.generation++;const generation=state.generation;
  clearInterval(state.jobTimer);
  if(state.page!==page){state.path='';state.selected=null;state.filter='';}
@@ -90,7 +92,76 @@ async function loadFiles(){
  state.entries=data.entries;state.path=data.path==='.'?'':data.path;
  state.selected=state.selected?state.entries.find(e=>e.path===state.selected.path)||null:null;
  renderFiles();
+ if(page==='library'&&!state.path)loadLibraryMap();else clearTimeout(state.mapTimer);
 }
+function mapDuration(seconds){
+ const total=Math.round(seconds),minutes=Math.floor(total/60),remaining=total%60;
+ return `${minutes.toLocaleString('en-GB')} min${remaining?' '+remaining+' sec':''}`;
+}
+function mapHue(name){let hash=2166136261;for(const char of name){hash^=char.codePointAt(0);hash=Math.imul(hash,16777619);}return (hash>>>0)%360;}
+function mapColor(artist,index=null,count=1){return `hsl(${mapHue(artist)} 58% ${index===null?66:count===1?72:57+19*index/(count-1)}%)`;}
+function mapSector(start,end,inner,outer){
+ // Split a whole circle into two arcs: a single SVG arc cannot close on itself.
+ const point=(r,a)=>`${(220+r*Math.cos(a)).toFixed(4)} ${(220+r*Math.sin(a)).toFixed(4)}`;
+ const arc=(r,from,to,clockwise)=>{
+  const parts=Math.abs(to-from)>Math.PI*1.999999?2:1;let path='';
+  for(let i=1;i<=parts;i++){const a=from+(to-from)*i/parts;path+=` A ${r} ${r} 0 ${Math.abs((to-from)/parts)>Math.PI?1:0} ${clockwise} ${point(r,a)}`;}return path;
+ };
+ return `M ${point(outer,start)}${arc(outer,start,end,1)}${inner?` L ${point(inner,end)}${arc(inner,end,start,0)}`:' L 220 220'} Z`;
+}
+function libraryMapShell(){
+ return `<details class="library-map" id="library-map" ${state.mapOpen===false?'':'open'}><summary><span>${icon('disc')}Library map</span><span class="map-summary" id="map-summary">Duration by artist and album</span>${icon('arrow')}</summary><div id="library-map-body"></div></details>`;
+}
+async function loadLibraryMap(refresh=false){
+ clearTimeout(state.mapTimer);
+ if(state.page!=='library'||state.path||!document.querySelector('#library-map'))return;
+ const epoch=state.mapEpoch=(state.mapEpoch||0)+1;
+ try{
+  const result=await api(refresh?'/library/stats/refresh':'/library/stats',refresh?{method:'POST'}:{});
+  if(state.mapEpoch!==epoch||state.page!=='library'||state.path)return;
+  if(result.updated!==state.libraryStats?.updated)state.mapSelected='';
+  state.libraryStats=result;renderLibraryMap();
+  if(result.scanning)state.mapTimer=setTimeout(()=>loadLibraryMap(),1000);
+ }catch(error){
+  if(state.mapEpoch!==epoch||!document.querySelector('#library-map-body'))return;
+  document.querySelector('#library-map-body').innerHTML=`<div class="map-empty">${esc(error.message)}<button class="small" data-action="refresh-map">Retry</button></div>`;
+ }
+}
+function renderLibraryMap(){
+ const body=document.querySelector('#library-map-body'),summary=document.querySelector('#map-summary');if(!body)return;
+ const data=state.libraryStats;
+ if(!data){body.innerHTML='<div class="map-empty"><span class="spinner"></span>Reading Library…</div>';return;}
+ summary.textContent=data.ready?`${mapDuration(data.duration)} · ${data.tracks} tracks`:data.scanning?'Reading Library…':'Duration by artist and album';
+ if(!data.ready||!data.duration){body.innerHTML=`<div class="map-empty">${data.scanning?'<span class="spinner"></span>Reading audio tags…':esc(data.error||(data.unreadable_folders?'Could not read Library folders. Check access permissions.':data.skipped?`${data.skipped} audio files have no readable duration.`:'No audio with a readable duration yet. Add music to Library to see the map.'))}<button class="small" data-action="refresh-map" ${data.scanning?'disabled':''}>${icon('refresh')}Refresh map</button></div>`;return;}
+ state.mapNodes=new Map();let angle=-Math.PI/2,segments='',labels='';
+ const node=(key,artist,album=null)=>{const entry=album||artist;state.mapNodes.set(key,{...entry,artist:artist.name,album:album?.name,artistKey:artist.key});return `data-map-key="${key}" data-map-artist="${artist.key}" tabindex="0" role="button" aria-label="${esc((album?artist.name+' — ':'')+entry.name+' · '+mapDuration(entry.duration)+' · '+(100*entry.duration/data.duration).toFixed(1)+'% of Library')}"`;};
+ const artists=data.artists.map((artist,index)=>({...artist,key:String(index)}));
+ for(const artist of artists){
+  const end=angle+Math.PI*2*artist.duration/data.duration;
+  segments+=`<path class="map-sector map-artist" ${node('artist-'+artist.key,artist)} fill="${mapColor(artist.name)}" d="${mapSector(angle,end,0,134)}"><title>${esc(artist.name)}</title></path>`;
+  let albumAngle=angle;
+  artist.albums.forEach((album,index)=>{const albumEnd=index===artist.albums.length-1?end:albumAngle+Math.PI*2*album.duration/data.duration;segments+=`<path class="map-sector map-album" ${node('album-'+artist.key+'-'+index,artist,album)} fill="${mapColor(artist.name,index,artist.albums.length)}" d="${mapSector(albumAngle,albumEnd,138,207)}"><title>${esc(artist.name+' — '+album.name)}</title></path>`;albumAngle=albumEnd;});
+  if(end-angle>.32){const middle=(angle+end)/2,r=artist.duration/data.duration>.999?0:82,max=Math.max(4,Math.min(18,Math.floor((end-angle)*65/6)));const name=artist.name.length>max?artist.name.slice(0,max-1)+'…':artist.name;labels+=`<text x="${220+r*Math.cos(middle)}" y="${220+r*Math.sin(middle)}" class="map-label">${esc(name)}</text>`;}
+  angle=end;
+ }
+ body.innerHTML=`<div class="map-layout"><div class="map-chart"><svg viewBox="0 0 440 440" aria-labelledby="map-chart-title map-chart-description"><title id="map-chart-title">Library duration by artist and album</title><desc id="map-chart-description">The filled inner circle shows artists. The outer ring divides each artist into albums. Sector angles represent track duration. Hover, focus or tap a sector to see its duration and share of the entire Library.</desc>${segments}${labels}</svg><p>Artists inside · Albums outside</p></div><div class="map-sidebar"><div class="map-total"><span>Total Library time</span><strong>${mapDuration(data.duration)}</strong><span>${artists.length} artists · ${data.albums} albums · ${data.tracks} tracks</span></div><div class="map-detail" id="map-detail" role="status" aria-live="polite"></div><label class="map-filter">Find an artist<input type="search" id="map-filter" placeholder="Filter artists…" value="${esc(state.mapFilter||'')}"></label><div class="map-legend" id="map-legend" aria-label="Artists by duration">${artists.map(artist=>`<button data-map-key="artist-${artist.key}" data-map-artist="${artist.key}" data-map-name="${esc(artist.name.toLowerCase())}"><svg viewBox="0 0 12 12" aria-hidden="true"><circle cx="6" cy="6" r="5" fill="${mapColor(artist.name)}"/></svg><span>${esc(artist.name)}</span><small>${mapDuration(artist.duration)}</small></button>`).join('')}</div></div></div><div class="map-footer"><span>${data.scanning?'<span class="spinner"></span>Updating…':data.error?esc(data.error):'Entire Library · Track duration, not listening history'}${data.skipped?` · ${data.skipped} unreadable or durationless audio files excluded`:''}${data.unreadable_folders?` · ${data.unreadable_folders} folders could not be read`:''}</span><button class="small quiet" data-action="refresh-map" ${data.scanning?'disabled':''}>${icon('refresh')}Refresh map</button></div>`;
+ filterMapArtists();selectMapNode(state.mapSelected||'',false);
+}
+function filterMapArtists(){const filter=(state.mapFilter||'').toLowerCase();document.querySelectorAll('#map-legend button').forEach(button=>button.hidden=!button.dataset.mapName.includes(filter));}
+function selectMapNode(key,persist=false){
+ const detail=document.querySelector('#map-detail'),node=state.mapNodes?.get(key);if(!detail)return;
+ if(persist)state.mapSelected=node?key:'';
+ document.querySelectorAll('.map-sector').forEach(path=>{path.classList.toggle('map-dimmed',Boolean(node)&&path.dataset.mapArtist!==node.artistKey);path.classList.toggle('map-active',path.dataset.mapKey===key);});
+ if(!node){detail.innerHTML='<span class="muted">Hover, focus or tap a sector to explore.</span>';return;}
+ detail.innerHTML=`<span class="map-detail-kind">${node.album?'Album':'Artist'}</span><strong>${esc(node.name)}</strong>${node.album?`<span>${esc(node.artist)}</span>`:''}<b>${mapDuration(node.duration)}</b><span>${(100*node.duration/state.libraryStats.duration).toFixed(2)}% of Library · ${node.tracks} tracks${node.album?'':` · ${node.albums.length} albums`}</span>${node.album?'':`<div class="map-album-list" aria-label="Albums by ${esc(node.name)}">${node.albums.map((album,index)=>`<button data-map-key="album-${node.artistKey}-${index}"><span>${esc(album.name)}</span><small>${mapDuration(album.duration)}</small></button>`).join('')}</div>`}`;
+}
+document.addEventListener('toggle',event=>{if(event.target.id==='library-map')state.mapOpen=event.target.open;},true);
+document.addEventListener('input',event=>{if(event.target.id==='map-filter'){state.mapFilter=event.target.value;filterMapArtists();}});
+document.addEventListener('pointerover',event=>{if(event.pointerType==='touch')return;const target=event.target.closest('.map-sector,#map-legend button');if(target)selectMapNode(target.dataset.mapKey);});
+document.addEventListener('pointerleave',event=>{if(event.target.matches?.('.map-chart,#map-legend'))selectMapNode(state.mapSelected||'');},true);
+document.addEventListener('focusin',event=>{const target=event.target.closest('.map-sector,#map-legend button');if(target)selectMapNode(target.dataset.mapKey);});
+document.addEventListener('click',event=>{const target=event.target.closest('[data-map-key]');if(target)selectMapNode(target.dataset.mapKey,true);});
+document.addEventListener('keydown',event=>{const target=event.target.closest('.map-sector');if(target&&['Enter',' '].includes(event.key)){event.preventDefault();selectMapNode(target.dataset.mapKey,true);}});
 function renderFiles(){
  const inbox=state.page==='inbox';
  if(state.drag&&document.querySelector('#file-list')){
@@ -101,8 +172,9 @@ function renderFiles(){
   renderFileList();return;
  }
  document.querySelector('#content').innerHTML=heading(inbox?'02':'01','','',`<button data-action="reload" class="icon-button" aria-label="Refresh" title="Refresh">${icon('refresh')}</button><button class="primary" data-action="new-folder">${icon('plus')} New folder</button><details class="upload-menu"><summary>${icon('upload')}Upload</summary><div><button data-action="upload-files">Files</button><button data-action="upload-folder">Folder</button></div></details>${inbox?`<button data-action="match-all">${icon('disc')}Match all</button>`:''}`)+
- `<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"><div class="breadcrumbs">${breadcrumbs()}</div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div class="file-actions" id="file-actions"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
+ `${!inbox&&!state.path?libraryMapShell():''}<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"><div class="breadcrumbs">${breadcrumbs()}</div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div class="file-actions" id="file-actions"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
  renderFileActions();renderFileList();renderInspector();
+ if(!inbox&&!state.path)renderLibraryMap();
 }
 function renderFileActions(){
  const el=document.querySelector('#file-actions');if(!el)return;const disabled=state.selected?'':'disabled';
@@ -576,6 +648,7 @@ document.addEventListener('click',async event=>{
   else if(action==='match')matchDialog();
   else if(action==='match-all'){button.disabled=true;const result=await api('/musicbrainz/match-all',{method:'POST',body:{path:state.path}});toast(`${result.queued} albums queued. ${result.skipped_imported} imported · ${result.skipped_matched} already matched · ${result.active} already queued.`);if(result.queued||result.active)await navigate('jobs');else await loadFiles();}
   else if(action==='close-modal')modal.close();
+  else if(action==='refresh-map')await loadLibraryMap(true);
   else if(action==='reload')await navigate(state.page);
   else if(action==='view-grid'||action==='view-list'){state.view=action==='view-grid'?'grid':'list';renderFileList();}
   else if(action==='dismiss-notice')button.closest('.download-notice')?.remove();

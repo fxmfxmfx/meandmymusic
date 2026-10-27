@@ -40,6 +40,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     else if(path.pathname==='/api/preferences'){if(method==='PATCH')preferences=body;result=preferences;}
     else if(path.pathname==='/api/musicbrainz/match-all')result={queued:1,jobs:[{id:planId}],skipped_imported:1,skipped_matched:1,active:0};
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
+    else if(path.pathname==='/api/library/stats'||path.pathname==='/api/library/stats/refresh') result=scenario.stats||{ready:true,scanning:false,duration:0,tracks:0,artists:[],albums:0,skipped:0};
     else if(path.pathname==='/api/soulseek/auth/status') result=account;
     else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Signed in'};}}
     else if(path.pathname==='/api/soulseek/auth/logout') {account={...account,logged_in:false,username:null,saved:false};result=account;}
@@ -446,6 +447,59 @@ test('Add to Library picks a destination graphically and previews an as-is copy 
   assert.ok(f.calls.some(c=>c.path==='/api/imports/manual-preview'&&c.body.path==='Artist <script>'&&c.body.destination==='Second Artist/Offline Album'));
   assert.match(f.window.document.querySelector('.plan-banner').textContent,/kept as-is.*No MusicBrainz/);
   assert.ok(!f.calls.some(c=>c.path.startsWith('/api/musicbrainz/')||c.path.endsWith('/apply')));
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('Library map fills the inner circle with artists and aligns album sectors by duration',async()=>{
+ const stats={ready:true,scanning:false,updated:1,duration:600,tracks:4,albums:3,skipped:0,artists:[
+  {name:'Artist <script>',duration:450,tracks:3,albums:[{name:'Long <album>',duration:300,tracks:2},{name:'Short',duration:150,tracks:1}]},
+  {name:'Second',duration:150,tracks:1,albums:[{name:'Only',duration:150,tracks:1}]}
+ ]};
+ const f=await fixture(true,null,{}, {stats});
+ try{
+  const doc=f.window.document;
+  assert.equal(doc.querySelectorAll('.map-artist').length,2);
+  assert.equal(doc.querySelectorAll('.map-album').length,3);
+  assert.match(doc.querySelector('.map-artist').getAttribute('d'),/ L 220 220 Z$/,'Artist sectors reach the center');
+  assert.doesNotMatch(doc.querySelector('.map-album').getAttribute('d'),/L 220 220/);
+  assert.notEqual(doc.querySelectorAll('.map-album')[0].getAttribute('fill'),doc.querySelectorAll('.map-album')[1].getAttribute('fill'));
+  assert.equal(doc.querySelector('.map-artist').getAttribute('fill').split(' ')[0],doc.querySelector('.map-album').getAttribute('fill').split(' ')[0]);
+  assert.match(doc.querySelector('#map-summary').textContent,/10 min · 4 tracks/);
+  const album=doc.querySelector('.map-album');
+  album.dispatchEvent(new f.window.MouseEvent('pointerover',{bubbles:true}));
+  assert.match(doc.querySelector('#map-detail').textContent,/Long <album>/);
+  assert.match(doc.querySelector('#map-detail').textContent,/5 min/);
+  assert.match(doc.querySelector('#map-detail').textContent,/50.00% of Library/);
+  assert.equal(doc.querySelectorAll('.map-detail script').length,0);
+  album.dispatchEvent(new f.window.MouseEvent('click',{bubbles:true}));
+  doc.querySelector('.map-chart').dispatchEvent(new f.window.Event('pointerleave'));
+  assert.match(doc.querySelector('#map-detail').textContent,/Long <album>/,'Tap/click selection stays visible');
+  doc.querySelector('.map-artist').dispatchEvent(new f.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+  assert.match(doc.querySelector('#map-detail').textContent,/75.00% of Library/);
+  assert.equal(doc.querySelectorAll('.map-album-list button').length,2);
+  f.click('.map-album-list button');
+  assert.match(doc.querySelector('#map-detail').textContent,/50.00% of Library/);
+  const filter=doc.querySelector('#map-filter');filter.value='second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
+  assert.equal(doc.querySelectorAll('#map-legend button:not([hidden])').length,1);
+  f.click('[data-action="refresh-map"]');await tick();
+  assert.ok(f.calls.some(call=>call.path==='/api/library/stats/refresh'&&call.method==='POST'));
+  f.click('[data-nav="inbox"]');await tick();assert.equal(doc.querySelector('#library-map'),null);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('single artist and album render whole circles without a hole, with sub-minute durations',async()=>{
+ const stats={ready:true,scanning:false,updated:1,duration:45,tracks:1,albums:1,artists:[{name:'Solo',duration:45,tracks:1,albums:[{name:'Single',duration:45,tracks:1}]}]};
+ const f=await fixture(true,null,{}, {stats});
+ try{
+  const artist=f.window.document.querySelector('.map-artist'),album=f.window.document.querySelector('.map-album');
+  assert.equal((artist.getAttribute('d').match(/ A /g)||[]).length,2);
+  assert.equal((album.getAttribute('d').match(/ A /g)||[]).length,4);
+  assert.doesNotMatch(artist.getAttribute('d'),/NaN|Infinity/);
+  artist.dispatchEvent(new f.window.MouseEvent('click',{bubbles:true}));
+  assert.match(f.window.document.querySelector('#map-detail').textContent,/0 min 45 sec/);
+  assert.match(f.window.document.querySelector('#map-detail').textContent,/100.00% of Library/);
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });
