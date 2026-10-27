@@ -7,9 +7,7 @@ another music server.
 ## Features
 
 - Browse Library and Inbox, filter files, inspect tags and play supported audio.
-- Explore Library time as a filled artist circle with an outer album ring.
-  Album shades share their artist's color; sector angles follow total track
-  duration. Hover, focus or tap for minutes, track counts and the share of Library.
+- See total Library track duration beside the Total library time label.
 - Drop files or folders from your computer into either section, or use Upload →
   Files / Folder. Nested paths are retained; existing files are never overwritten.
 - Add an Inbox album directly to a chosen Library folder without MusicBrainz.
@@ -86,22 +84,14 @@ Open `http://localhost:8080` and sign in using `APP_PASSWORD` from `.env`. Chang
 `APP_BIND` to a reachable host address for LAN access. Use HTTPS or VPN for remote
 access. Keep `.env` private; never publish it or include it in bug reports.
 
-## Library map
+## Library time
 
-The map appears at the Library root and can be collapsed. It counts every readable
-audio file in Library, including existing archives, uploads and manual imports;
-it does not depend on the beets catalog or listening history. Artists are grouped
-by album artist (falling back to track artist), then by album title. Missing tags
-appear as Unknown artist / Unknown album. Identically tagged album titles under
-one artist are combined. Inbox, hidden staging files and symbolic links are excluded.
-
-The first inventory runs in the background. Duration and tags are cached in the
-application state directory, with changed files read again on later scans.
-Returning to Library rechecks the inventory after one minute; **Refresh map**
-starts an immediate scan after external changes. Unreadable files or folders are
-reported and excluded from totals. No audio or tags are modified, and no remote
-service is contacted. A searchable artist list and album details make small
-sectors accessible on touchscreens and with the keyboard.
+At the Library root, **Total library time** shows the summed duration of readable
+tracks, including existing archives, uploads and manual imports. The first count
+runs in the background; unchanged files are cached in application state. Returning
+to Library rechecks the inventory after one minute. The Library Refresh button
+starts an immediate scan after external changes. Inbox, hidden staging, symbolic
+links and unreadable durations are excluded. Audio and tags are kept unchanged.
 
 ## Soulseek
 

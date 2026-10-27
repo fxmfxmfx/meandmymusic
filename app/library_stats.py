@@ -21,7 +21,7 @@ class LibraryStats:
         self.database = settings.state / "library-stats.db"
         self.lock = threading.Lock()
         self.stopping = threading.Event()
-        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="library-map")
+        self.worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="library-time")
         self.running = False
         self.checked = 0.0
         self.progress = 0
@@ -56,7 +56,7 @@ class LibraryStats:
                     self.result = result
         except Exception:
             with self.lock:
-                self.error = "Could not read the Library map. Check access to Library and application state, then refresh."
+                self.error = "Could not read Library time. Check access to Library and application state, then refresh."
         finally:
             with self.lock:
                 self.running = False

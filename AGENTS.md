@@ -99,9 +99,8 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   Soulseek connection status belongs in the Soulseek page heading.
 - Library duration statistics count the actual Library tree, not just beets
   imports. Keep scanning in a separate worker, cache unchanged files and exclude
-  hidden staging, symlinks and unreadable durations. The chart's artist sectors
-  fill the center; aligned album sectors form the outer ring. All percentages
-  use total Library duration, and touch/keyboard must expose the same details.
+  hidden staging, symlinks and unreadable durations. Show only Total library time
+  and the total duration at the Library root; keep this summary compact.
 
 ## Matching and import contracts
 

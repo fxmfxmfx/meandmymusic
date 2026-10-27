@@ -451,56 +451,30 @@ test('Add to Library picks a destination graphically and previews an as-is copy 
  }finally{f.close();}
 });
 
-test('Library map fills the inner circle with artists and aligns album sectors by duration',async()=>{
- const stats={ready:true,scanning:false,updated:1,duration:600,tracks:4,albums:3,skipped:0,artists:[
-  {name:'Artist <script>',duration:450,tracks:3,albums:[{name:'Long <album>',duration:300,tracks:2},{name:'Short',duration:150,tracks:1}]},
-  {name:'Second',duration:150,tracks:1,albums:[{name:'Only',duration:150,tracks:1}]}
- ]};
- const f=await fixture(true,null,{}, {stats});
+test('Library shows only its total duration and refreshes through the existing button',async()=>{
+ const f=await fixture(true,null,{}, {stats:{ready:true,scanning:false,duration:600,artists:[{name:'Hidden artist'}]}});
  try{
   const doc=f.window.document;
-  assert.equal(doc.querySelectorAll('.map-artist').length,2);
-  assert.equal(doc.querySelectorAll('.map-album').length,3);
-  assert.match(doc.querySelector('.map-artist').getAttribute('d'),/ L 220 220 Z$/,'Artist sectors reach the center');
-  assert.doesNotMatch(doc.querySelector('.map-album').getAttribute('d'),/L 220 220/);
-  assert.notEqual(doc.querySelectorAll('.map-album')[0].getAttribute('fill'),doc.querySelectorAll('.map-album')[1].getAttribute('fill'));
-  assert.equal(doc.querySelector('.map-artist').getAttribute('fill').split(' ')[0],doc.querySelector('.map-album').getAttribute('fill').split(' ')[0]);
-  assert.match(doc.querySelector('#map-summary').textContent,/10 min · 4 tracks/);
-  const album=doc.querySelector('.map-album');
-  album.dispatchEvent(new f.window.MouseEvent('pointerover',{bubbles:true}));
-  assert.match(doc.querySelector('#map-detail').textContent,/Long <album>/);
-  assert.match(doc.querySelector('#map-detail').textContent,/5 min/);
-  assert.match(doc.querySelector('#map-detail').textContent,/50.00% of Library/);
-  assert.equal(doc.querySelectorAll('.map-detail script').length,0);
-  album.dispatchEvent(new f.window.MouseEvent('click',{bubbles:true}));
-  doc.querySelector('.map-chart').dispatchEvent(new f.window.Event('pointerleave'));
-  assert.match(doc.querySelector('#map-detail').textContent,/Long <album>/,'Tap/click selection stays visible');
-  doc.querySelector('.map-artist').dispatchEvent(new f.window.KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
-  assert.match(doc.querySelector('#map-detail').textContent,/75.00% of Library/);
-  assert.equal(doc.querySelectorAll('.map-album-list button').length,2);
-  f.click('.map-album-list button');
-  assert.match(doc.querySelector('#map-detail').textContent,/50.00% of Library/);
-  const filter=doc.querySelector('#map-filter');filter.value='second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
-  assert.equal(doc.querySelectorAll('#map-legend button:not([hidden])').length,1);
-  f.click('[data-action="refresh-map"]');await tick();
-  assert.ok(f.calls.some(call=>call.path==='/api/library/stats/refresh'&&call.method==='POST'));
-  f.click('[data-nav="inbox"]');await tick();assert.equal(doc.querySelector('#library-map'),null);
+  assert.equal(doc.querySelector('.library-time').textContent,'Total library time10 min');
+  assert.equal(doc.querySelector('#library-map,.map-chart,#map-filter'),null);
+  assert.ok(!doc.querySelector('#content').textContent.includes('Hidden artist'));
+  f.click('[data-action="reload"]');await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/library/stats/refresh'&&c.method==='POST'));
+  f.click('[data-nav="inbox"]');await tick();
+  assert.equal(doc.querySelector('.library-time'),null);
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });
 
-test('single artist and album render whole circles without a hole, with sub-minute durations',async()=>{
- const stats={ready:true,scanning:false,updated:1,duration:45,tracks:1,albums:1,artists:[{name:'Solo',duration:45,tracks:1,albums:[{name:'Single',duration:45,tracks:1}]}]};
- const f=await fixture(true,null,{}, {stats});
- try{
-  const artist=f.window.document.querySelector('.map-artist'),album=f.window.document.querySelector('.map-album');
-  assert.equal((artist.getAttribute('d').match(/ A /g)||[]).length,2);
-  assert.doesNotMatch(artist.getAttribute('d'),/L 220 220/,'A single artist has no radial seam');
-  assert.equal((album.getAttribute('d').match(/ A /g)||[]).length,4);
-  assert.doesNotMatch(artist.getAttribute('d'),/NaN|Infinity/);
-  artist.dispatchEvent(new f.window.MouseEvent('click',{bubbles:true}));
-  assert.match(f.window.document.querySelector('#map-detail').textContent,/0 min 45 sec/);
-  assert.match(f.window.document.querySelector('#map-detail').textContent,/100.00% of Library/);
-  assert.deepEqual(f.errors,[]);
- }finally{f.close();}
+test('Library duration handles hours, short tracks, empty libraries and pending counts',async()=>{
+ for(const [stats,expected] of [
+  [{ready:true,duration:4455},'1 h 14 min'],
+  [{ready:true,duration:45},'0 min 45 sec'],
+  [{ready:true,duration:0},'0 min'],
+  [{ready:false,scanning:true},'…'],
+  [{ready:false,error:'Cannot read Library'},'Unavailable']
+ ]){
+  const f=await fixture(true,null,{}, {stats});
+  try{assert.equal(f.window.document.querySelector('#library-time-value').textContent,expected);assert.deepEqual(f.errors,[]);}finally{f.close();}
+ }
 });

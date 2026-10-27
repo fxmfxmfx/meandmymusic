@@ -289,48 +289,27 @@ test('manual Add to Library copies an unmatched album and artwork through the fo
  assert.deepEqual(errors,[]);
 });
 
-test('Library duration map reads actual audio tags, supports pointer hover and touch, and fits every theme',async()=>{
+test('Library total time reads actual audio and stays compact on desktop and mobile',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  await new Promise((resolve,reject)=>{
-  const script=`from pathlib import Path\nimport wave\nfrom mediafile import MediaFile\nroot=Path(${JSON.stringify(path.join(directory,'music','Map Fixture'))})\nfor artist,album,seconds in [('Aurora','First Light',40),('Aurora','After Hours',20),('Velvet','Blue Room',30)]:\n p=root/artist/album/'01.wav'\n p.parent.mkdir(parents=True,exist_ok=True)\n with wave.open(str(p),'wb') as w:\n  w.setnchannels(1)\n  w.setsampwidth(2)\n  w.setframerate(8000)\n  w.writeframes(b'\\0\\0'*8000*seconds)\n m=MediaFile(p)\n m.artist=m.albumartist=artist\n m.album=album\n m.save()\n`;
+  const script=`from pathlib import Path\nimport wave\nfrom mediafile import MediaFile\nroot=Path(${JSON.stringify(path.join(directory,'music','Duration Fixture'))})\nfor artist,album,seconds in [('Aurora','First Light',40),('Aurora','After Hours',20),('Velvet','Blue Room',30)]:\n p=root/artist/album/'01.wav'\n p.parent.mkdir(parents=True,exist_ok=True)\n with wave.open(str(p),'wb') as w:\n  w.setnchannels(1)\n  w.setsampwidth(2)\n  w.setframerate(8000)\n  w.writeframes(b'\\0\\0'*8000*seconds)\n m=MediaFile(p)\n m.artist=m.albumartist=artist\n m.album=album\n m.save()\n`;
   const child=spawn(process.env.MMM_TEST_PYTHON||'python',['-c',script],{stdio:['ignore','ignore','pipe']});let log='';child.stderr.on('data',data=>log+=data);child.on('exit',code=>code?reject(new Error(log)):resolve());
  });
  await page.locator('[data-nav="library"]').click();
- await page.locator('#library-map').waitFor();
- await page.evaluate(()=>loadLibraryMap(true));
- await page.waitForFunction(()=>document.querySelectorAll('.map-artist').length===2&&!state.libraryStats?.scanning);
- assert.equal(await page.locator('.map-artist').count(),2);
- assert.equal(await page.locator('.map-album').count(),3);
- assert.match(await page.locator('#map-summary').textContent(),/1 min 30 sec · 3 tracks/);
- const point=await page.evaluate(()=>{
-  const data=state.libraryStats,artist=data.artists[0],angle=-Math.PI/2+Math.PI*artist.albums[0].duration/data.duration;
-  const rect=document.querySelector('.map-chart>svg').getBoundingClientRect();return {x:rect.x+(220+175*Math.cos(angle))*rect.width/440,y:rect.y+(220+175*Math.sin(angle))*rect.height/440};
- });
- await page.mouse.move(point.x,point.y);assert.match(await page.locator('#map-detail').textContent(),/First Light.*0 min 40 sec.*44.44% of Library/);
- await page.locator('.map-artist').first().focus();await page.keyboard.press('Enter');
- assert.match(await page.locator('#map-detail').textContent(),/Aurora.*1 min.*66.67% of Library/);
- await page.locator('#map-filter').fill('Velvet');assert.equal(await page.locator('#map-legend button:visible').count(),1);
- await page.locator('#map-filter').fill('');
+ await page.locator('#library-time-value').waitFor();
+ await page.evaluate(()=>loadLibraryTime(true));
+ await page.waitForFunction(()=>document.querySelector('#library-time-value')?.textContent==='1 min 30 sec'&&!state.libraryStats?.scanning);
+ assert.equal(await page.locator('.library-time').textContent(),'Total library time1 min 30 sec');
+ assert.equal(await page.locator('#library-map,.map-chart,#map-filter').count(),0);
  for(const theme of ['current','light','dark','gruvbox','mocha']){
   await page.evaluate(value=>applyMusicTheme(value),theme);
-  await page.screenshot({path:`artifacts/library-map-${theme}.png`,fullPage:true,animations:'disabled'});
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  }
+ await page.screenshot({path:'artifacts/library-time-desktop.png',fullPage:true,animations:'disabled'});
  await page.setViewportSize({width:390,height:844});
- const mobilePoint=await page.evaluate(()=>{const rect=document.querySelector('.map-chart>svg').getBoundingClientRect();return {x:rect.x+rect.width*.35,y:rect.y+rect.height*.5};});
- // Dispatch a touchscreen tap through Chromium's touch input instead of a JS click.
- const touch=await page.context().newCDPSession(page);
- await touch.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:1});
- await touch.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[{x:mobilePoint.x,y:mobilePoint.y}]});
- await touch.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});
- await page.waitForFunction(()=>document.querySelector('#map-detail')?.textContent.includes('Velvet'));
- await touch.send('Emulation.setTouchEmulationEnabled',{enabled:false});await touch.detach();
- assert.match(await page.locator('#map-detail').textContent(),/Artist.*Velvet.*33.33% of Library/);
- assert.equal(await page.locator('.map-sector').first().evaluate(node=>getComputedStyle(node).webkitTapHighlightColor),'rgba(0, 0, 0, 0)');
- assert.equal(await page.locator('.map-artist.map-dimmed').evaluate(node=>getComputedStyle(node).opacity),'1','Artist colors and labels stay readable while exploring albums');
- await page.screenshot({path:'artifacts/library-map-mobile.png',fullPage:true,animations:'disabled'});
+ await page.screenshot({path:'artifacts/library-time-mobile.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
- await page.locator('.library-map>summary').click();assert.equal(await page.locator('#library-map').getAttribute('open'),null);
- await page.locator('[data-action="reload"]').click();assert.equal(await page.locator('#library-map').getAttribute('open'),null);
+ await page.locator('[data-action="reload"]').click();
+ await page.waitForFunction(()=>document.querySelector('#library-time-value')?.textContent==='1 min 30 sec');
  assert.deepEqual(errors,[]);
 });
