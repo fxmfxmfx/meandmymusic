@@ -90,3 +90,13 @@ def test_upload_reports_insufficient_space_before_any_file_transfer(auth, settin
     monkeypatch.setattr('app.uploads.shutil.disk_usage',lambda root:SimpleNamespace(free=1))
     assert begin(auth,files=[{'path':'Big.flac','size':2}]).status_code == 507
     assert not list(settings.inbox.glob('.mmm-upload-*'))
+
+
+def test_upload_does_not_recreate_a_destination_removed_during_transfer(auth, settings):
+    destination = settings.inbox/'Chosen Folder'
+    destination.mkdir()
+    job = begin(auth,path='Chosen Folder',files=[{'path':'One.flac','size':1}]).json()['id']
+    assert auth.put(f'/api/uploads/{job}/0',content=b'x').status_code==200
+    destination.rmdir()
+    assert auth.post(f'/api/uploads/{job}/complete').status_code==404
+    assert not destination.exists()

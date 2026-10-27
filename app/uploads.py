@@ -67,7 +67,7 @@ class Uploads:
             if not base.is_dir():
                 raise HTTPException(400, 'Select a destination folder')
             session = {'root': root, 'path': path, 'root_name': root_name, 'files': files,
-                       'directories': directories, 'received': set(), 'writing': set(), 'touched': now}
+                       'directories': directories, 'base_identity': (base.stat().st_dev, base.stat().st_ino), 'received': set(), 'writing': set(), 'touched': now}
             self._validate(session)
             if sum(file['size'] for file in files) > shutil.disk_usage(root).free:
                 raise HTTPException(507, 'Not enough free space for this upload')
@@ -79,6 +79,9 @@ class Uploads:
             return {'id': key, 'files': len(files), 'bytes': sum(f['size'] for f in files)}
 
     def _validate(self, session):
+        base = safe_path(session['root'], session['path'])
+        if not base.is_dir() or (base.stat().st_dev, base.stat().st_ino) != session['base_identity']:
+            raise HTTPException(409, 'The destination folder changed during upload. Start again.')
         names = set()
         for file in session['files']:
             self._relative(file['path'])
