@@ -326,6 +326,8 @@ test('Library duration map reads actual audio tags, supports pointer hover and t
  await page.waitForFunction(()=>document.querySelector('#map-detail')?.textContent.includes('Velvet'));
  await touch.send('Emulation.setTouchEmulationEnabled',{enabled:false});await touch.detach();
  assert.match(await page.locator('#map-detail').textContent(),/Artist.*Velvet.*33.33% of Library/);
+ assert.equal(await page.locator('.map-sector').first().evaluate(node=>getComputedStyle(node).webkitTapHighlightColor),'rgba(0, 0, 0, 0)');
+ assert.equal(await page.locator('.map-artist.map-dimmed').evaluate(node=>getComputedStyle(node).opacity),'1','Artist colors and labels stay readable while exploring albums');
  await page.screenshot({path:'artifacts/library-map-mobile.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('.library-map>summary').click();assert.equal(await page.locator('#library-map').getAttribute('open'),null);
