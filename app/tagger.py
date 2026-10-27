@@ -4,11 +4,13 @@ import os
 import shutil
 import tempfile
 import time
+import unicodedata
 from collections import Counter
 from pathlib import Path
 
 from beets import autotag
 from beets.library import Item, Library
+import musicbrainzngs
 
 from app.files import AUDIO, operation_lock, safe_path
 from app.integrations import musicbrainz_lock
@@ -40,6 +42,49 @@ def album_items(settings, source):
     return [Item.from_path(str(safe_path(settings.inbox, p.relative_to(settings.inbox).as_posix()))) for p in paths]
 
 
+def normalized_title(value):
+    return "".join(c for c in unicodedata.normalize("NFKC", value).casefold() if c.isalnum())
+
+
+def discover_release_ids(album, items=()):
+    """Widen a weak match without assuming the artist credit in local tags is right.
+
+    Called inside musicbrainz_lock/beets_proxy: reuse rate limiting, user agent
+    and SOCKS transport. Fetch full tracklists through beets only for exact titles.
+    """
+    ids, errors = [], []
+    try:
+        result = musicbrainzngs.search_releases(release=album, strict=True, limit=25)
+        title = normalized_title(album)
+        ids = list(dict.fromkeys(release["id"] for release in result.get("release-list", [])
+                                if release.get("id") and normalized_title(release.get("title", "")) == title))
+    except musicbrainzngs.MusicBrainzError as error:
+        errors.append(error)
+    titles = list(dict.fromkeys(item.title.strip() for item in items
+                               if item.title and any(c.isalpha() for c in item.title)
+                               and item.title.casefold() not in {"intro", "outro", "interlude"}))
+    # Sample across the album, then score every local track against each candidate.
+    sample = list(dict.fromkeys(titles[index] for index in (0, len(titles)//2, len(titles)-1))) if titles else []
+    votes = Counter()
+    for track_title in sample:
+        try:
+            result = musicbrainzngs.search_recordings(recording=track_title, strict=True, limit=10)
+            found = {release["id"] for recording in result.get("recording-list", [])
+                     if normalized_title(recording.get("title", "")) == normalized_title(track_title)
+                     for release in recording.get("release-list", []) if release.get("id")}
+            # Duplicate recordings/editions from one query count as one track vote.
+            votes.update(found)
+        except musicbrainzngs.MusicBrainzError as error:
+            errors.append(error)
+    supported = [release_id for release_id, count in votes.most_common()
+                 if count >= min(2, len(sample))]
+    overlap = [release_id for release_id in ids if release_id in supported]
+    result_ids = list(dict.fromkeys(overlap + supported[:6] + ids[:6] + supported + ids))[:12]
+    if not result_ids and errors:
+        raise errors[0]
+    return result_ids
+
+
 def match_album(settings, source, artist=None, album=None):
     items = album_items(settings, source)
     def common(field):
@@ -55,23 +100,45 @@ def match_album(settings, source, artist=None, album=None):
     kwargs = {"search_artist": search_artist or None, "search_album": search_album}
     if artist is None and album is None and len(ids) == 1:
         kwargs["search_ids"] = list(ids)
+    warnings = []
     with musicbrainz_lock:
         try:
             with beets_proxy(settings.outbound_proxy):
                 _, _, proposal = autotag.tag_album(items, **kwargs)
+                matches = {match.info.album_id: match for match in proposal.candidates}
+                best = min(matches.values(), key=lambda m: float(m.distance), default=None)
+                # Beets' default search only returns a few fuzzy results and an
+                # existing MBID can restrict it to the wrong edition entirely.
+                if best is None or float(best.distance) > .10 or normalized_title(best.info.album) != normalized_title(search_album):
+                    try:
+                        ids = [release_id for release_id in discover_release_ids(search_album, items) if release_id not in matches]
+                        if ids:
+                            _, _, expanded = autotag.tag_album(items, search_ids=ids)
+                            matches.update((match.info.album_id, match) for match in expanded.candidates)
+                    except musicbrainzngs.MusicBrainzError:
+                        warnings.append("Additional album/track search is unavailable. Results may be incomplete.")
         finally:
             time.sleep(1.1)
     candidates = []
-    for match in sorted(proposal.candidates, key=lambda candidate: float(candidate.distance))[:12]:
+    ordered = sorted(matches.values(), key=lambda candidate: float(candidate.distance))
+    for match in ordered[:20]:
         info = match.info
         candidates.append({"id": info.album_id, "artist": info.artist, "title": info.album,
                            "date": str(info.year or ""), "country": info.country or "",
                            "format": info.media or "", "tracks": len(info.tracks),
                            "disambiguation": info.albumdisambig or "",
                            "confidence": round(max(0, 1 - float(match.distance)) * 100, 1),
+                           "exact_title": normalized_title(info.album) == normalized_title(search_album),
                            "extra_files": len(match.extra_items), "missing_tracks": len(match.extra_tracks)})
+    recommended = None
+    if candidates:
+        top = candidates[0]
+        clear_lead = len(candidates) == 1 or top["confidence"] - candidates[1]["confidence"] >= 10
+        if top["confidence"] >= 95 and top["exact_title"] and not top["extra_files"] and not top["missing_tracks"] and clear_lead:
+            recommended = top["id"]
     return {"artist": search_artist, "album": search_album, "tracks": len(items),
-            "has_tags": bool(tagged_artist or tagged_album), "candidates": candidates}
+            "has_tags": bool(tagged_artist or tagged_album), "candidates": candidates,
+            "recommended_release_id": recommended, "warnings": warnings}
 
 
 def remove_catalog_paths(settings, source):

@@ -176,8 +176,14 @@ async function searchReleases(artist,album){
  const el=document.querySelector('#release-results'),generation=++state.matchGeneration;el.innerHTML='<div class="loading"><span class="spinner"></span>Matching tags and tracks…</div>';
  try{const result=await api('/musicbrainz/match',{method:'POST',body:{path:state.matchPath,...(artist===undefined?{}:{artist,album})}});
   if(generation!==state.matchGeneration||!el.isConnected||!modal.open)return;
+  const artistField=document.querySelector('#match-artist'),albumField=document.querySelector('#match-album');
+  const edited=artist===undefined&&((artistField?.value&&artistField.value!==result.artist)||(albumField?.value&&albumField.value!==result.album));
   if(artist===undefined){const a=document.querySelector('#match-artist'),b=document.querySelector('#match-album');if(a&&!a.value)a.value=result.artist;if(b&&!b.value)b.value=result.album;}
+  if(result.recommended_release_id&&!edited){await makePreview(result.recommended_release_id);return;}
   el.innerHTML=`<p class="field-help">${result.tracks} local tracks · ${result.has_tags?'Uses embedded tags, track names and durations.':'No album tags found. Confirm the artist and album above.'}</p>`+(result.candidates.length?`<div class="release-list">${result.candidates.map(release=>`<article class="release-card"><div><h3>${esc(release.artist)} — ${esc(release.title)}</h3><p>${[release.date,release.country,release.format,`${release.tracks} tracks`,release.disambiguation].filter(Boolean).map(esc).join(' · ')}</p>${release.extra_files||release.missing_tracks?`<p class="warning-text">${release.extra_files} extra files · ${release.missing_tracks} missing tracks</p>`:''}</div><div class="release-actions"><span class="match-score">${release.confidence}%</span><a href="https://musicbrainz.org/release/${esc(release.id)}" target="_blank" rel="noreferrer" aria-label="Open release in MusicBrainz">${icon('external')}</a><button class="small" data-release="${esc(release.id)}">Preview</button></div></article>`).join('')}</div>`:'<p class="search-help">No matches. Check the artist and album, or use a release MBID.</p>');
+  const notices=[...(result.warnings||[])];
+  if(result.candidates.length&&result.candidates[0].confidence<80)notices.push('No confident match yet. These are weak suggestions, not an identified album. Check the artist credit or use an exact release ID.');
+  if(notices.length)el.insertAdjacentHTML('afterbegin',`<div class="plan-banner warning">${notices.map(esc).join('<br>')}</div>`);
  }catch(error){if(generation===state.matchGeneration&&el.isConnected)el.innerHTML=`<div class="error-box">${esc(error.message)}</div>`;}
 }
 async function makePreview(releaseId){

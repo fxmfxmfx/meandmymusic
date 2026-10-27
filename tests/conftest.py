@@ -48,6 +48,7 @@ def album(settings):
 
 @pytest.fixture
 def match(monkeypatch):
+    monkeypatch.setattr("app.tagger.discover_release_ids", lambda album, items=(): [])
     def fake_match(items, **kwargs):
         tracks = [TrackInfo(title=f"Track {i}", track_id=f"recording-{i}", release_track_id=f"track-{i}",
                             artist="Test Artist", artist_id="artist-id", artists=["Test Artist"], artists_ids=["artist-id"],

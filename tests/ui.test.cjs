@@ -12,7 +12,7 @@ const folder = (name) => ({name, path:name, directory:true, modified:1700000000,
 const file = (name) => ({name, path:name, directory:false, audio:true, modified:1700000000, size:12345});
 const tick = () => new Promise(resolve => setTimeout(resolve, 20));
 
-async function fixture(authenticated=true, authFailure=null) {
+async function fixture(authenticated=true, authFailure=null, matchOverrides={}) {
   const calls = [], errors = [];
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
@@ -46,7 +46,8 @@ async function fixture(authenticated=true, authFailure=null) {
     else if(path.pathname===`/api/soulseek/searches/${search}`) result={search:{id:search,isComplete:true},responses:[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
     else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:[];
     else if(path.pathname==='/api/jobs') result=[plan];
-    else if(path.pathname==='/api/musicbrainz/match') result={artist:body.artist??'Tagged Artist',album:body.album??'Tagged Album',tracks:2,has_tags:true,candidates:[{id:release,artist:'Tagged Artist',title:'Tagged Album',tracks:2,confidence:98,extra_files:0,missing_tracks:0}]};
+    else if(path.pathname==='/api/musicbrainz/match') result={artist:body.artist??'Tagged Artist',album:body.album??'Tagged Album',tracks:2,has_tags:true,candidates:[{id:release,artist:'Tagged Artist',title:'Tagged Album',tracks:2,confidence:98,extra_files:0,missing_tracks:0}],...matchOverrides};
+    else if(path.pathname==='/api/imports/preview') result={id:planId};
     else if(path.pathname===`/api/jobs/${planId}`) result=plan;
     else if(path.pathname===`/api/imports/${planId}/apply`) result={id:'import-job'};
     else if(path.pathname==='/api/jobs/import-job') result={status:'done',result:{files:1}};
@@ -228,6 +229,27 @@ test('matching starts with metadata and accepts explicit artist and album correc
     f.window.document.querySelector('#match-artist').value='Corrected Artist';f.submit('#release-form');await tick();
     assert.ok(f.calls.some(c=>c.path==='/api/musicbrainz/match'&&c.body.artist==='Corrected Artist'&&c.body.album==='Tagged Album'));
     assert.ok(!f.calls.some(c=>c.path==='/api/musicbrainz/releases'));
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+});
+
+test('strong matching opens a preview automatically without applying it', async () => {
+  const f=await fixture(true,null,{recommended_release_id:release});
+  try{
+    f.click('[data-nav="inbox"]');await tick();f.click('.folder-card');f.click('[data-action="match"]');await tick();await tick();
+    assert.ok(f.calls.some(c=>c.path==='/api/imports/preview'&&c.body.release_id===release));
+    assert.ok(f.window.document.querySelector('.plan-track'));
+    assert.ok(!f.calls.some(c=>c.path.endsWith('/apply')));
+    assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+});
+
+test('weak matching remains suggestions and never opens an automatic preview', async () => {
+  const f=await fixture(true,null,{candidates:[{id:release,artist:'Tagged Artist',title:'Wrong Album',tracks:2,confidence:41,extra_files:0,missing_tracks:0}]});
+  try{
+    f.click('[data-nav="inbox"]');await tick();f.click('.folder-card');f.click('[data-action="match"]');await tick();
+    assert.match(f.window.document.querySelector('#release-results .warning').textContent,/weak suggestions/);
+    assert.ok(!f.calls.some(c=>c.path==='/api/imports/preview'));
     assert.deepEqual(f.errors,[]);
   }finally{f.close();}
 });

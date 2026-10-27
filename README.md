@@ -138,6 +138,13 @@ bundled slskd service and its `depends_on` if they are unnecessary.
 3. Matching reads embedded tags and compares tracks through beets. Review the
    suggested artist/album. If tags are missing, the folder name is a fallback;
    fill in the artist and album to improve the search.
+   Weak matches trigger an additional exact album-title search and searches for
+   recordings matching several local track titles. Releases shared by multiple
+   track results are considered even when the artist/album credit differs.
+   No artist filter is required for these fallback searches. Results are scored
+   against the actual local tracks. A unique, complete match scoring at least 95%
+   with a ten-point lead opens its preview automatically; it never imports files
+   without review. Existing release IDs do not prevent this fallback.
 4. Compare edition, date, medium, track count and match score. A percentage ranks
    candidates; it does not guarantee that a particular pressing is correct.
 5. Choose **Preview**, inspect each track's old/new tags and destination path,

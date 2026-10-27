@@ -151,3 +151,99 @@ def test_match_endpoint_returns_ranked_candidates_and_empty_folder_error(auth, s
     (settings.inbox / "empty").mkdir()
     assert auth.post("/api/musicbrainz/match", json={"path": "empty"}).status_code == 400
     assert auth.post("/api/musicbrainz/match", json={"path": "../state"}).status_code == 400
+
+
+def test_weak_artist_search_expands_exact_album_ids_and_scores_local_tracks(settings, album, match, monkeypatch):
+    from types import SimpleNamespace
+    target_id = "cfb473ef-d4e9-4b6f-8a31-f674450e9241"
+    calls = []
+    original = match
+    def matcher(items, **kwargs):
+        calls.append(kwargs)
+        a, b, proposal = original(items, **kwargs)
+        candidate = proposal.candidates[0]
+        if "search_ids" in kwargs:
+            candidate.info.album_id = target_id
+            candidate.info.album = "Wanted Album"
+            candidate.info.artist = "Alternate Artist Credit"
+            candidate.distance = .02
+        else:
+            candidate.info.album = "Wrong Album"
+            candidate.distance = .6
+        return a, b, SimpleNamespace(candidates=[candidate])
+    monkeypatch.setattr("app.tagger.autotag.tag_album", matcher)
+    monkeypatch.setattr("app.tagger.discover_release_ids", lambda title, items=(): [target_id])
+    before = {p.name: fingerprint(p) for p in album.iterdir()}
+    result = match_album(settings, "Test Album", "Tagged Artist", "Wanted Album")
+    assert calls[-1] == {"search_ids": [target_id]}
+    assert result["candidates"][0]["id"] == target_id
+    assert result["candidates"][0]["artist"] == "Alternate Artist Credit"
+    assert result["recommended_release_id"] == target_id
+    assert {p.name: fingerprint(p) for p in album.iterdir()} == before
+
+
+def test_title_discovery_is_strict_but_does_not_lock_artist_or_track_count(monkeypatch):
+    from app.tagger import discover_release_ids
+    calls = []
+    def search(**kwargs):
+        calls.append(kwargs)
+        return {"release-list": [{"id": RELEASE, "title": "Wanted Album"},
+                                 {"id": RELEASE, "title": "WANTED ALBUM"},
+                                 {"id": "wrong", "title": "Not Wanted Album"}]}
+    monkeypatch.setattr("app.tagger.musicbrainzngs.search_releases", search)
+    assert discover_release_ids("Wanted Album") == [RELEASE]
+    assert calls == [{"release": "Wanted Album", "strict": True, "limit": 25}]
+
+
+def test_incomplete_or_ambiguous_match_does_not_recommend_automatic_preview(settings, album, match, monkeypatch):
+    from types import SimpleNamespace
+    def matcher(items, **kwargs):
+        a, b, proposal = match(items, **kwargs)
+        candidate = proposal.candidates[0]
+        candidate.extra_tracks = [object()]
+        return a, b, SimpleNamespace(candidates=[candidate])
+    monkeypatch.setattr("app.tagger.autotag.tag_album", matcher)
+    assert match_album(settings, "Test Album")["recommended_release_id"] is None
+
+
+def test_title_search_failure_preserves_initial_candidates(settings, album, match, monkeypatch):
+    import musicbrainzngs
+    def fail(title, items=()):
+        raise musicbrainzngs.NetworkError("test failure")
+    monkeypatch.setattr("app.tagger.discover_release_ids", fail)
+    result = match_album(settings, "Test Album", "Artist", "Different Album")
+    assert result["candidates"] and result["warnings"]
+    assert result["recommended_release_id"] is None
+
+
+def test_track_search_finds_shared_release_without_artist_or_album_match(monkeypatch):
+    from types import SimpleNamespace
+    from app.tagger import discover_release_ids
+    monkeypatch.setattr("app.tagger.musicbrainzngs.search_releases", lambda **kwargs: {"release-list": []})
+    calls = []
+    def search(**kwargs):
+        calls.append(kwargs)
+        title = kwargs["recording"]
+        return {"recording-list": [{"title": title, "release-list": [
+            {"id": RELEASE, "title": "Different Album Credit"},
+            {"id": "unrelated-" + title, "title": "Compilation"}]},
+            {"title": title, "release-list": [{"id": "unrelated-" + title}]}]}
+    monkeypatch.setattr("app.tagger.musicbrainzngs.search_recordings", search)
+    items = [SimpleNamespace(title=title) for title in ["Opening Song", "Middle Song", "Closing Song"]]
+    assert discover_release_ids("Wrong Album Tag", items) == [RELEASE]
+    assert len(calls) == 3
+    assert all(set(call) == {"recording", "strict", "limit"} for call in calls)
+
+
+def test_competing_complete_high_scoring_editions_require_review(settings, album, match, monkeypatch):
+    from types import SimpleNamespace
+    def matcher(items, **kwargs):
+        a, b, proposal = match(items, **kwargs)
+        first = proposal.candidates[0]
+        _, _, other = match(items, **kwargs)
+        second = other.candidates[0]
+        second.info.album_id = "cfb473ef-d4e9-4b6f-8a31-f674450e9241"
+        second.distance = .03
+        return a, b, SimpleNamespace(candidates=[first, second])
+    monkeypatch.setattr("app.tagger.autotag.tag_album", matcher)
+    assert match_album(settings, "Test Album")["recommended_release_id"] is None
