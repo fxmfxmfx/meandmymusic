@@ -1,12 +1,13 @@
 'use strict';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all'};
+const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
  inbox:'<path d="M4 4h16l2 13v3H2v-3Z"/><path d="M2 15h6l2 3h4l2-3h6M12 3v9m-3-3 3 3 3-3"/>',
  search:'<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
+ upload:'<path d="M12 16V3m-5 5 5-5 5 5M4 17v4h16v-4"/>',
  download:'<path d="M12 3v12m-5-5 5 5 5-5M4 17v4h16v-4"/>',
  jobs:'<rect x="4" y="3" width="16" height="18" rx="2"/><path d="m8 9 2 2 4-4M8 16h8"/>',
  history:'<path d="M3 11a9 9 0 1 1 2 7M3 4v7h7m2-4v6l4 2"/>',
@@ -47,13 +48,16 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
- clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
+ if(state.drag)finishDrag(false);
+ clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();}clearSystemDrop();state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
  app.innerHTML=`<main class="login-screen"><div class="login-theme">${themePicker()}</div><form class="login-form" id="login-form">${brand()}<h1>Open your library</h1><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button class="primary" type="submit">Sign in ${icon('arrow')}</button><p class="login-error" id="login-error" role="alert"></p></form></main>`;
 }
 function shell(){
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.5</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
+ state.preferenceEdited=false;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.6</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
+ api('/preferences').then(value=>{if(!document.querySelector('.shell')||state.preferenceEdited)return;state.preferences=value;const checkbox=document.querySelector('#delete-inbox-after-import');if(checkbox)checkbox.checked=value.delete_inbox_after_import;}).catch(error=>toast(error.message,true));
  refreshAccount().catch(()=>{});clearInterval(state.accountTimer);state.accountTimer=setInterval(()=>refreshAccount(false).catch(()=>{}),10000);
 }
 function updateStatus(){const el=document.querySelector('#slskd-status');if(el)el.innerHTML=`<i class="dot${state.account?.logged_in?'':' off'}"></i> ${state.account?.logged_in?'Soulseek connected':state.system?.slskd?'Soulseek offline':'slskd unavailable'}`;}
@@ -96,8 +100,8 @@ function renderFiles(){
   document.querySelector('.breadcrumbs').innerHTML=breadcrumbs();document.querySelector('.browser').dataset.dropPath=state.path;
   renderFileList();return;
  }
- document.querySelector('#content').innerHTML=heading(inbox?'02':'01','','',`<button data-action="reload" class="icon-button" aria-label="Refresh" title="Refresh">${icon('refresh')}</button><button class="primary" data-action="new-folder">${icon('plus')} New folder</button>`)+
- `<div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"><div class="breadcrumbs">${breadcrumbs()}</div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div class="file-actions" id="file-actions"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drag to move · Double-click to open</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
+ document.querySelector('#content').innerHTML=heading(inbox?'02':'01','','',`<button data-action="reload" class="icon-button" aria-label="Refresh" title="Refresh">${icon('refresh')}</button><button class="primary" data-action="new-folder">${icon('plus')} New folder</button><details class="upload-menu"><summary>${icon('upload')}Upload</summary><div><button data-action="upload-files">Files</button><button data-action="upload-folder">Folder</button></div></details>${inbox?`<button data-action="match-all">${icon('disc')}Match all</button>`:''}`)+
+ `<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"><div class="breadcrumbs">${breadcrumbs()}</div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div class="file-actions" id="file-actions"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
  renderFileActions();renderFileList();renderInspector();
 }
 function renderFileActions(){
@@ -108,6 +112,17 @@ function breadcrumbs(){
  const chunks=state.path?state.path.split('/'):[];
  return `<button class="quiet" data-path="" data-drop-path="">${icon(root()==='inbox'?'inbox':'folder')}${root()==='inbox'?'Inbox':'Library'}</button>`+chunks.map((part,i)=>`<span>/</span><button class="quiet" data-path="${esc(chunks.slice(0,i+1).join('/'))}" data-drop-path="${esc(chunks.slice(0,i+1).join('/'))}">${esc(part)}</button>`).join('');
 }
+function processingBadges(entry){
+ if(root()!=='inbox'||!entry.processing)return '';
+ const status=entry.processing,labels=[];
+ if(status.imported)labels.push(`<span class="badge processing-imported">${icon('check')}Imported</span>`);
+ else if(status.imported_files)labels.push(`<span class="badge processing-imported">Imported ${status.imported_files}/${status.audio_files}</span>`);
+ if(status.match==='matched')labels.push('<span class="badge processing-matched">Matched</span>');
+ else if(status.match==='partial')labels.push(`<span class="badge processing-matched">Matched ${status.matched_files}/${status.audio_files}</span>`);
+ else if(status.match==='review')labels.push('<span class="badge warm">Needs review</span>');
+ else if(status.match==='none')labels.push('<span class="badge">No match</span>');
+ return labels.length?`<span class="processing-badges">${labels.join('')}</span>`:'';
+}
 function renderFileList(){
  const entries=state.entries.filter(e=>e.name.toLowerCase().includes(state.filter.toLowerCase()));
  const dirs=entries.filter(e=>e.directory), files=entries.filter(e=>!e.directory);
@@ -115,22 +130,22 @@ function renderFileList(){
  if(!entries.length){el.innerHTML=`<div class="empty">${icon(state.filter?'search':root()==='inbox'?'inbox':'folder')}<h3>${state.filter?'No results':root()==='inbox'?'Inbox is empty':'Library is empty'}</h3><p>${state.filter?'Try another name.':root()==='inbox'?'Download music from Soulseek or add an album to the Inbox folder.':'Add music to the Library folder or import an album from Inbox.'}</p>${!state.filter?`<button class="primary" data-nav="${root()==='inbox'?'soulseek':'inbox'}">${icon(root()==='inbox'?'search':'inbox')}${root()==='inbox'?'Search Soulseek':'Open Inbox'}</button>`:''}</div>`;return;}
  let html='';
  if(dirs.length){html=`<div class="section-heading"><h2>Folders <span> / ${dirs.length}</span></h2><div class="view-switch"><button class="${state.view==='grid'?'active':''}" data-action="view-grid" aria-label="Grid">${icon('grid')}</button><button class="${state.view==='list'?'active':''}" data-action="view-list" aria-label="List">${icon('list')}</button></div></div>`;
-  if(state.view==='grid')html+=`<div class="folder-grid">${dirs.map(entry=>`<button class="folder-card ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" data-drop-path="${esc(entry.path)}" title="Click to select, double-click to open"><div class="folder-art color-${color(entry.name)}">${icon('folder')}</div>${state.selected?.path===entry.path?`<span class="selected-mark">${icon('check')}</span>`:''}<div class="folder-name">${esc(entry.name)}</div><div class="folder-meta">Folder · ${date(entry.modified)}</div></button>`).join('')}</div>`;
+  if(state.view==='grid')html+=`<div class="folder-grid">${dirs.map(entry=>`<button class="folder-card ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" data-drop-path="${esc(entry.path)}" title="Click to select, double-click to open"><div class="folder-art color-${color(entry.name)}">${icon('folder')}</div>${state.selected?.path===entry.path?`<span class="selected-mark">${icon('check')}</span>`:''}<div class="folder-name">${esc(entry.name)}</div>${processingBadges(entry)}<div class="folder-meta">Folder · ${date(entry.modified)}</div></button>`).join('')}</div>`;
   else html+=fileTable(dirs);
  }
  if(files.length)html+=`<div class="section-heading"><h2>Files <span> / ${files.length}</span></h2></div>${fileTable(files)}`;
  el.innerHTML=html;
 }
-function fileTable(entries){return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Format</th><th>Size</th><th></th></tr></thead><tbody>${entries.map(entry=>`<tr class="file-row ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" ${entry.directory?`data-drop-path="${esc(entry.path)}"`:""} tabindex="0"><td><div class="file-title">${icon(entry.directory?'folder':entry.audio?'music':'file')}<div>${esc(entry.name)}<small>${date(entry.modified)}</small></div></div></td><td><span class="badge">${entry.directory?'FOLDER':esc(entry.name.split('.').pop().toUpperCase())}</span></td><td class="muted">${size(entry.size)}</td><td>${entry.directory?`<button class="quiet icon-button" data-open="${esc(entry.path)}" aria-label="Open folder">${icon('arrow')}</button>`:entry.audio?`<button class="quiet icon-button" data-play="${esc(entry.path)}" aria-label="Play">${icon('play')}</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;}
+function fileTable(entries){return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Format</th><th>Size</th><th></th></tr></thead><tbody>${entries.map(entry=>`<tr class="file-row ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" ${entry.directory?`data-drop-path="${esc(entry.path)}"`:""} tabindex="0"><td><div class="file-title">${icon(entry.directory?'folder':entry.audio?'music':'file')}<div>${esc(entry.name)}${processingBadges(entry)}<small>${date(entry.modified)}</small></div></div></td><td><span class="badge">${entry.directory?'FOLDER':esc(entry.name.split('.').pop().toUpperCase())}</span></td><td class="muted">${size(entry.size)}</td><td>${entry.directory?`<button class="quiet icon-button" data-open="${esc(entry.path)}" aria-label="Open folder">${icon('arrow')}</button>`:entry.audio?`<button class="quiet icon-button" data-play="${esc(entry.path)}" aria-label="Play">${icon('play')}</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;}
 function renderInspector(){
  const el=document.querySelector('#inspector');if(!el)return;const entry=state.selected;
  document.querySelector('.workspace')?.classList.toggle('has-selection',Boolean(entry));if(!entry){el.innerHTML='';return;}
- el.innerHTML=`<div class="inspector-header"><span>Details</span><button class="quiet icon-button" data-action="deselect" aria-label="Close details">${icon('close')}</button></div><div class="inspector-body"><h3>${esc(entry.name)}</h3><div class="detail-row"><span>Type</span><strong>${entry.directory?'Folder':entry.audio?'Audio':'File'}</strong></div><div class="detail-row"><span>Modified</span><strong>${date(entry.modified)}</strong></div>${!entry.directory?`<div class="detail-row"><span>Size</span><strong>${size(entry.size)}</strong></div>`:''}<div id="audio-metadata"></div>${entry.audio?`<button data-play="${esc(entry.path)}">${icon('play')}Play</button>`:''}</div>`;
+ el.innerHTML=`<div class="inspector-header"><span>Details</span><button class="quiet icon-button" data-action="deselect" aria-label="Close details">${icon('close')}</button></div><div class="inspector-body"><h3>${esc(entry.name)}</h3>${processingBadges(entry)}<div class="detail-row"><span>Type</span><strong>${entry.directory?'Folder':entry.audio?'Audio':'File'}</strong></div><div class="detail-row"><span>Modified</span><strong>${date(entry.modified)}</strong></div>${!entry.directory?`<div class="detail-row"><span>Size</span><strong>${size(entry.size)}</strong></div>`:''}<div id="audio-metadata"></div>${entry.audio?`<button data-play="${esc(entry.path)}">${icon('play')}Play</button>`:''}</div>`;
  if(entry.audio){const selected=entry.path;api(`/metadata?${query({root:root(),path:entry.path})}`).then(tags=>{if(state.selected?.path!==selected)return;const metadata=document.querySelector('#audio-metadata');if(metadata)metadata.innerHTML=[['Artist',tags.artist],['Album',tags.album],['Duration',tags.duration?`${Math.floor(tags.duration/60)}:${String(tags.duration%60).padStart(2,'0')}`:''],['Bitrate',tags.bitrate?`${tags.bitrate} kbps`:'']].filter(([,value])=>value).map(([label,value])=>`<div class="detail-row"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('');}).catch(()=>{});}
 }
 function selectFile(path){state.selected=state.entries.find(e=>e.path===path);document.querySelectorAll('[data-select]').forEach(el=>el.classList.toggle('selected',el.dataset.select===path));renderInspector();renderFileActions();}
 async function openFolder(path){state.path=path;state.selected=null;state.filter='';await loadFiles();}
-function showModal(title,body,footer=''){delete modal.dataset.jobId;modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${title}</h2><button class="quiet icon-button" data-action="close-modal" aria-label="Close">${icon('close')}</button></div><div class="modal-content">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;if(!modal.open)modal.showModal();}
+function showModal(title,body,footer=''){delete modal.dataset.jobId;delete modal.dataset.upload;modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${title}</h2><button class="quiet icon-button" data-action="close-modal" aria-label="Close">${icon('close')}</button></div><div class="modal-content">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;if(!modal.open)modal.showModal();}
 function fileDialog(mode){
  const entry=state.selected;
  if(mode!=='new-folder'&&!entry)return;
@@ -277,8 +292,8 @@ function renderTransfers(){
  };
  document.querySelector('#transfer-tree').innerHTML=all.length?`<div class="remote-tree" data-tree-scope="transfers">${remoteTree(all).sort(transferNodeCompare).map(n=>render(n,0)).join('')||'<div class="empty"><h3>No downloads in this filter</h3></div>'}</div>`:`<div class="empty">${icon('download')}<h3>No downloads</h3><p>Download music from Soulseek to see it here.</p><button class="primary" data-nav="soulseek">Search music ${icon('arrow')}</button></div>`;
 }
-function matchDialog(){
- const entry=state.selected;if(!entry?.directory||root()!=='inbox')return;state.matchPath=entry.path;state.matchGeneration=(state.matchGeneration||0)+1;
+function matchDialog(path,automatic=true){
+ const entry=path?{path,name:basename(path),directory:true}:state.selected;if(!entry?.directory||(!path&&root()!=='inbox'))return;state.matchAuto=automatic;state.matchPath=entry.path;state.matchGeneration=(state.matchGeneration||0)+1;
  showModal('Match album',`<p>${esc(entry.name)}</p><form id="release-form"><div class="match-fields"><div><label for="match-artist">Album artist</label><input id="match-artist" name="artist" maxlength="300" placeholder="Read from tags"></div><div><label for="match-album">Album</label><input id="match-album" name="album" maxlength="300" placeholder="Read from tags"></div></div><button class="primary" type="submit">${icon('search')}Find matches</button></form><div id="release-results"></div><details class="manual-release"><summary>Use a MusicBrainz release ID</summary><form id="mbid-form" class="search-form"><input name="mbid" aria-label="MusicBrainz release ID" placeholder="Release MBID or URL" required><button type="submit">Preview</button></form></details>`);searchReleases();
 }
 async function searchReleases(artist,album){
@@ -288,7 +303,9 @@ async function searchReleases(artist,album){
   const artistField=document.querySelector('#match-artist'),albumField=document.querySelector('#match-album');
   const edited=artist===undefined&&((artistField?.value&&artistField.value!==result.artist)||(albumField?.value&&albumField.value!==result.album));
   if(artist===undefined){const a=document.querySelector('#match-artist'),b=document.querySelector('#match-album');if(a&&!a.value)a.value=result.artist;if(b&&!b.value)b.value=result.album;}
-  if(result.recommended_release_id&&!edited){await makePreview(result.recommended_release_id);return;}
+  if(state.page==='inbox')loadFiles().catch(()=>{});
+  const chosen=result.selected_release_id||result.recommended_release_id;
+  if(chosen&&!edited&&state.matchAuto!==false){await makePreview(chosen);return;}
   el.innerHTML=`<p class="field-help">${result.tracks} local tracks · ${result.has_tags?'Uses embedded tags, track names and durations.':'No album tags found. Confirm the artist and album above.'}</p>`+(result.candidates.length?`<div class="release-list">${result.candidates.map(release=>`<article class="release-card"><div><h3>${esc(release.artist)} — ${esc(release.title)}</h3><p>${[release.date,release.country,release.format,`${release.tracks} tracks`,release.disambiguation].filter(Boolean).map(esc).join(' · ')}</p>${release.extra_files||release.missing_tracks?`<p class="warning-text">${release.extra_files} extra files · ${release.missing_tracks} missing tracks</p>`:''}</div><div class="release-actions"><span class="match-score">${release.confidence}%</span><a href="https://musicbrainz.org/release/${esc(release.id)}" target="_blank" rel="noreferrer" aria-label="Open release in MusicBrainz">${icon('external')}</a><button class="small" data-release="${esc(release.id)}">Preview</button></div></article>`).join('')}</div>`:'<p class="search-help">No matches. Check the artist and album, or use a release MBID.</p>');
   const notices=[...(result.warnings||[])];
   if(result.candidates.length&&result.candidates[0].confidence<80)notices.push('No confident match yet. These are weak suggestions, not an identified album. Check the artist credit or use an exact release ID.');
@@ -307,22 +324,22 @@ async function watchJob(id){
  const ownsModal=modal.open&&modal.dataset.jobId===id;
  if(job.status==='queued'||job.status==='running'){setTimeout(()=>{if(epoch===state.transferEpoch)watchJob(id);},1800);return;}
  if(job.status==='ready'){if(ownsModal)renderPlan(job);else toast('Preview ready. Open it in Tasks.');}
- else if(job.status==='done'){if(ownsModal)modal.close();toast(`Album imported: ${job.result.files} files. Original files remain in Inbox.`);if(['inbox','library'].includes(state.page))loadFiles().catch(()=>{});}
+ else if(job.status==='done'){if(ownsModal)modal.close();const cleanup=job.result.cleanup;toast(`Album imported: ${job.result.files} files. ${cleanup?.status==='deleted'?'Inbox folder deleted.':cleanup?.message||'Original files remain in Inbox.'}`,['failed','skipped'].includes(cleanup?.status));if(['inbox','library'].includes(state.page))loadFiles().catch(()=>{});}
  else if(job.status==='cancelled'){if(ownsModal)modal.close();}
  else{if(ownsModal)showModal('Review needed',`<div class="error-box">${esc(job.error||'Task interrupted')}</div>`);else toast(job.error||'Task interrupted',true);}
  if(state.page==='jobs')loadJobs().catch(()=>{});
 }
 function renderPlan(job){
- const plan=job.result, weak=plan.confidence<90;
- showModal('Import preview',`<div class="plan-banner${weak?' warning':''}"><strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library. Original files remain in Inbox.</div>${plan.rows.map(row=>`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('')}<p class="field-help">Preview valid for one hour. Artwork and non-audio files are not copied automatically.</p>`,`<button data-cancel-job="${esc(job.id)}">Reject</button><button data-action="close-modal">Back</button><button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}Import album</button>`);modal.dataset.jobId=job.id;
+ const plan=job.kind==='match'?job.result.plan:job.result, weak=plan.confidence<90;
+ showModal('Import preview',`<div class="plan-banner${weak?' warning':''}"><strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library. ${plan.delete_source?`<div class="cleanup-warning"><strong>After import, permanently delete Inbox/${esc(plan.source)} and everything inside it, including artwork and other files.</strong></div>`:'Original files remain in Inbox.'}</div>${plan.rows.map(row=>`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('')}<p class="field-help">Preview valid for one hour. Artwork and non-audio files are not copied automatically.</p>`,`<button data-cancel-job="${esc(job.id)}">Reject</button><button data-match-again="${esc(plan.source)}">Back</button><button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}${plan.delete_source?'Import & delete Inbox folder':'Import album'}</button>`);modal.dataset.jobId=job.id;
 }
 function diffTags(tags){return [['Track',tags.title],['Artist',tags.artist],['Album',tags.album],['Year',tags.year||'—'],['Track number',`${tags.disc||1}.${tags.track||'—'} / ${tags.tracktotal||'—'}`]].map(([key,value])=>`<dt>${key}</dt><dd>${esc(value||'—')}</dd>`).join('');}
 const statusLabels={queued:'Queued',running:'Running',ready:'Ready for review',done:'Done',applied:'Applied',applying:'Importing',failed:'Error',interrupted:'Interrupted',cancelled:'Cancelled',expired:'Expired'};
 async function loadJobs(){
  const jobs=await api('/jobs');state.jobs=jobs;if(state.page!=='jobs')return;
- document.querySelector('#content').innerHTML=heading('05','Tasks','',`<button data-action="clear-jobs" ${jobs.some(j=>['done','applied','failed','interrupted','cancelled','expired'].includes(j.status))?'':'disabled'}>${icon('trash')}Clear finished</button>`)+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='preview'?'Match and preview':'Import to Library'}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted','expired'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${job.kind==='preview'&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Review</button>`:''}${job.kind==='preview'&&['queued','running','ready'].includes(job.status)?`<button class="small" data-cancel-job="${esc(job.id)}">${job.status==='ready'?'Reject':'Cancel'}</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
+ document.querySelector('#content').innerHTML=heading('05','Tasks','',`<button data-action="clear-jobs" ${jobs.some(j=>['done','applied','failed','interrupted','cancelled','expired'].includes(j.status))?'':'disabled'}>${icon('trash')}Clear finished</button>`)+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='match'?'Match album':job.kind==='preview'?'Match and preview':'Import to Library'}${job.source?` · ${esc(job.source)}`:''}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}${job.result?.cleanup?.status==='deleted'?' · Inbox folder deleted':''}${job.result?.cleanup?.message?`<br>${esc(job.result.cleanup.message)}`:''}${job.result?.preview_error?`<br>${esc(job.result.preview_error)}`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted','expired'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${['preview','match'].includes(job.kind)&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Review</button>`:''}${['preview','match'].includes(job.kind)&&['queued','running','ready'].includes(job.status)?`<button class="small" data-cancel-job="${esc(job.id)}">${job.status==='ready'?'Reject':'Cancel'}</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
 }
-const historyTitles={move:'Moved / renamed',mkdir:'Folder created',delete:'Deleted',import:'Album imported',download:'Download queued'};
+const historyTitles={upload:'Files uploaded',move:'Moved / renamed',mkdir:'Folder created',delete:'Deleted',import:'Album imported',download:'Download queued'};
 async function loadHistory(){state.history=await api('/history');if(state.page==='history')renderHistory();}
 function renderHistory(){
  const content=document.querySelector('#content');
@@ -331,15 +348,15 @@ function renderHistory(){
  const events=state.history.filter(e=>state.historyFilter==='all'||e.kind===state.historyFilter),days=new Map();
  for(const event of events){const day=new Date(event.created*1000).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});if(!days.has(day))days.set(day,[]);days.get(day).push(event);}
  document.querySelector('#history-timeline').innerHTML=events.length?[...days].map(([day,items])=>`<section class="history-day"><h2>${esc(day)}</h2><ol class="history-timeline">${items.map(event=>{
-  const d=event.data,kind=event.kind,detail=kind==='move'?`<span class="history-path">${esc(d.source)}</span>${icon('arrow')}<span class="history-path">${esc(d.destination)}</span>`:['mkdir','delete'].includes(kind)?`<span class="history-path">${esc(d.path)}</span>`:kind==='import'?`${esc(d.artist)} — ${esc(d.album)}<span class="muted"> · ${esc(d.files)} files</span>`:`${esc(d.username)}<span class="muted"> · ${esc(d.files)} files</span>`;
-  return `<li class="history-event${event.undone?' undone':''}"><span class="history-marker">${icon(({move:'move',mkdir:'folder',delete:'trash',import:'disc',download:'download'})[kind]||'history')}</span><time datetime="${new Date(event.created*1000).toISOString()}">${new Date(event.created*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</time><div class="history-body"><div class="history-title"><strong>${esc(historyTitles[kind]||kind)}</strong>${d.root?`<span class="badge">${d.root==='inbox'?'Inbox':'Library'}</span>`:''}${event.undone?'<span class="badge">Undone</span>':''}</div><div class="history-detail">${detail}</div></div>${!event.undone&&['move','mkdir'].includes(kind)?`<button class="small quiet" data-undo="${esc(event.id)}">${icon('history')}Undo</button>`:''}</li>`;
+  const d=event.data,kind=event.kind,detail=kind==='move'?`<span class="history-path">${esc(d.source)}</span>${icon('arrow')}<span class="history-path">${esc(d.destination)}</span>`:['mkdir','delete'].includes(kind)?`<span class="history-path">${esc(d.path)}</span>`:kind==='upload'?`${d.root==='inbox'?'Inbox':'Library'}/${esc(d.path||'')}<span class="muted"> · ${esc(d.files)} files</span>`:kind==='import'?`${esc(d.artist)} — ${esc(d.album)}<span class="muted"> · ${esc(d.files)} files</span>`:`${esc(d.username)}<span class="muted"> · ${esc(d.files)} files</span>`;
+  return `<li class="history-event${event.undone?' undone':''}"><span class="history-marker">${icon(({upload:'upload',move:'move',mkdir:'folder',delete:'trash',import:'disc',download:'download'})[kind]||'history')}</span><time datetime="${new Date(event.created*1000).toISOString()}">${new Date(event.created*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</time><div class="history-body"><div class="history-title"><strong>${esc(historyTitles[kind]||kind)}</strong>${d.root?`<span class="badge">${d.root==='inbox'?'Inbox':'Library'}</span>`:''}${event.undone?'<span class="badge">Undone</span>':''}</div><div class="history-detail">${detail}</div></div>${!event.undone&&['move','mkdir'].includes(kind)?`<button class="small quiet" data-undo="${esc(event.id)}">${icon('history')}Undo</button>`:''}</li>`;
  }).join('')}</ol></section>`).join(''):'<div class="empty"><h3>No operations</h3><p>File operations and queued downloads will appear here.</p></div>';
 }
 function notificationSetting(){return !('Notification' in window)?'Browser notifications are unavailable. Download notices appear in the app.':Notification.permission==='granted'?'Browser notifications enabled.':Notification.permission==='denied'?'Browser notifications are blocked. Change the permission in your browser settings.':'Show a browser notification when a download finishes.';}
 function renderSettings(){
  const system=state.system;
  document.querySelector('#content').innerHTML=heading('07','Settings','Accounts and services',`<button data-action="refresh-system">${icon('refresh')}Check</button>`)+`
- <section class="preferences-panel"><div class="preference-row"><div><h2>Appearance</h2><p>Theme</p></div>${themePicker()}</div><div class="preference-row"><div><h2>Download notifications</h2><p id="notification-status">${notificationSetting()}</p></div>${'Notification' in window&&Notification.permission==='default'?'<button data-action="enable-notifications">Enable</button>':''}</div><div class="preference-row"><div><h2>Session</h2><p>Sign out of the music manager.</p></div><button data-action="logout">${icon('logout')}Sign out</button></div></section>
+ <section class="preferences-panel"><div class="preference-row"><div><h2>Appearance</h2><p>Theme</p></div>${themePicker()}</div><div class="preference-row"><div><h2>Download notifications</h2><p id="notification-status">${notificationSetting()}</p></div>${'Notification' in window&&Notification.permission==='default'?'<button data-action="enable-notifications">Enable</button>':''}</div><div class="preference-row"><div><label class="preference-title" for="delete-inbox-after-import">Delete Inbox folder after import</label><p>After a successful import, permanently delete the source folder and all its contents. Each import preview shows the folder that will be deleted.</p></div><input class="preference-switch" id="delete-inbox-after-import" type="checkbox" role="switch" ${state.preferences.delete_inbox_after_import?'checked':''}></div><div class="preference-row"><div><h2>Session</h2><p>Sign out of the music manager.</p></div><button data-action="logout">${icon('logout')}Sign out</button></div></section>
  <section id="soulseek-account" class="account-panel" aria-label="Soulseek account"></section>
  <div class="connection-grid"><article class="connection">${icon('search')}<h2>slskd</h2><p>Search and downloads</p><span class="badge${system?.slskd?'':' warm'}">${system?.slskd?'API available':'API unavailable'}</span></article><article class="connection">${icon('disc')}<h2>beets + MusicBrainz</h2><p>Album matching and tagging</p><span class="badge">beets installed</span></article><article class="connection">${icon('music')}<h2>Navidrome</h2><p>Point Navidrome at the Library folder.</p>${system?.navidrome_url?`<a href="${esc(system.navidrome_url)}" target="_blank" rel="noreferrer">Open Navidrome ↗</a>`:'<p>Set NAVIDROME_URL to add a shortcut.</p>'}</article></div>`;
  renderAccountPanel();
@@ -398,6 +415,67 @@ function finishDrag(render=true){
 }
 function dragCanVisit(path){const source=state.drag;return source&&root()===source.root&&path!==source.path&&!(source.directory&&path.startsWith(source.path+'/'));}
 function validDrop(path){return dragCanVisit(path)&&join(path,state.drag.name)!==state.drag.path;}
+function externalFiles(event){return !state.drag&&[...(event.dataTransfer?.types||[])].includes('Files');}
+function clearSystemDrop(){state.systemDragDepth=0;document.querySelector('#system-drop-overlay')?.remove();document.querySelectorAll('.upload-drop-target').forEach(el=>el.classList.remove('upload-drop-target'));}
+function showSystemDrop(event){
+ if(!['library','inbox'].includes(state.page)||!document.querySelector('.shell'))return;
+ let overlay=document.querySelector('#system-drop-overlay');if(!overlay){overlay=document.createElement('div');overlay.id='system-drop-overlay';document.body.append(overlay);}
+ const target=event.target.closest('[data-drop-path]');document.querySelectorAll('.upload-drop-target').forEach(el=>el.classList.remove('upload-drop-target'));if(target)target.classList.add('upload-drop-target');
+ const path=target?.dataset.dropPath??state.path;overlay.innerHTML=`<div>${icon('upload')}<strong>Upload to ${root()==='inbox'?'Inbox':'Library'}${path?'/'+esc(path):''}</strong><span>Files and folders · Existing files are kept</span></div>`;
+}
+async function readDropped(sources, fallback){
+ const files=[],directories=[];
+ async function visit(entry,parent=''){
+  const path=join(parent,entry.name);
+  if(files.length+directories.length>10000)throw new Error('Choose fewer than 10,000 files and folders at a time.');
+  if(entry.isFile){const file=await new Promise((resolve,reject)=>entry.file(resolve,reject));files.push({file,path});}
+  else if(entry.isDirectory){directories.push(path);const reader=entry.createReader();while(true){const batch=await new Promise((resolve,reject)=>reader.readEntries(resolve,reject));if(!batch.length)break;for(const child of batch)await visit(child,path);}}
+ }
+ if(sources.some(source=>source.entry)){for(const source of sources){if(source.entry)await visit(source.entry);else if(source.file)files.push({file:source.file,path:source.file.name});}}
+ else for(const file of fallback)files.push({file,path:file.webkitRelativePath||file.name});
+ return {files,directories};
+}
+function uploadProgress(upload,bytes,index){
+ const progress=modal.querySelector('#upload-progress'),label=modal.querySelector('#upload-progress-label');
+ if(modal.dataset.upload!=='active'||!progress||!label)return;
+ const percent=upload.total?Math.min(100,bytes/upload.total*100):upload.files.length?index/upload.files.length*100:100;
+ progress.value=percent;label.textContent=`${index} / ${upload.files.length} files · ${size(bytes)} / ${size(upload.total)} · ${percent.toFixed(0)}%`;
+}
+function uploadBlob(upload,index,offset){
+ return new Promise((resolve,reject)=>{
+  const xhr=new XMLHttpRequest();upload.xhr=xhr;xhr.open('PUT',`/api/uploads/${upload.id}/${index}`);xhr.setRequestHeader('X-Requested-With','meandmymusic');xhr.setRequestHeader('Content-Type','application/octet-stream');
+  xhr.upload.onprogress=event=>uploadProgress(upload,offset+event.loaded,index);
+  xhr.onload=()=>{let data;try{data=JSON.parse(xhr.responseText);}catch{data={detail:`Upload failed (HTTP ${xhr.status}).`};}if(xhr.status>=200&&xhr.status<300)resolve(data);else{if(xhr.status===401)showLogin();reject(new Error(typeof data.detail==='string'?data.detail:'Upload failed.'));}};
+  xhr.onerror=()=>reject(new Error('Upload connection interrupted. No files were published.'));xhr.onabort=()=>reject(new Error('Upload cancelled.'));xhr.send(upload.files[index].file);
+ });
+}
+async function startUpload(files,directories,location){
+ if(state.upload){toast('An upload is already in progress.',true);return;}
+ if(!files.length&&!directories.length){toast('No readable files were dropped. Try Upload folder.',true);return;}
+ if(!location&&!['library','inbox'].includes(state.page)){toast('Open Library or Inbox to upload files.',true);return;}
+ const upload={files,directories,root:location?.root||root(),path:location?.path??state.path,total:files.reduce((sum,entry)=>sum+entry.file.size,0),cancelled:false};state.upload=upload;
+ showModal('Uploading',`<p>Destination: ${upload.root==='inbox'?'Inbox':'Library'}/${esc(upload.path)}</p><progress id="upload-progress" max="100" value="0" aria-label="Upload progress"></progress><p id="upload-progress-label">Preparing ${files.length} files…</p><p>Keep this page open until the upload finishes.</p>`,`<button data-action="cancel-upload">Cancel upload</button>`);modal.dataset.upload='active';
+ try{
+  const result=await api('/uploads',{method:'POST',body:{root:upload.root,path:upload.path,files:files.map(entry=>({path:entry.path,size:entry.file.size})),directories}});upload.id=result.id;
+  let bytes=0;for(let i=0;i<files.length;i++){if(upload.cancelled)throw new Error('Upload cancelled.');await uploadBlob(upload,i,bytes);bytes+=files[i].file.size;uploadProgress(upload,bytes,i+1);}
+  if(upload.cancelled)throw new Error('Upload cancelled.');
+  const complete=await api(`/uploads/${upload.id}/complete`,{method:'POST'});upload.committed=true;if(modal.dataset.upload==='active')modal.close();toast(`Uploaded ${complete.files} files and ${complete.folders} folders to ${upload.root==='inbox'?'Inbox':'Library'}.`);if(state.page===upload.root)await loadFiles();
+ }catch(error){if(modal.dataset.upload==='active'&&modal.open)showModal('Upload stopped',`<div class="error-box">${esc(error.message)}</div>`);else toast(error.message,true);}
+ finally{if(upload.id&&!upload.committed)await api(`/uploads/${upload.id}`,{method:'DELETE'}).catch(()=>{});state.upload=null;delete modal.dataset.upload;}
+}
+document.addEventListener('dragenter',event=>{if(externalFiles(event)){event.preventDefault();state.systemDragDepth=(state.systemDragDepth||0)+1;showSystemDrop(event);}});
+document.addEventListener('dragover',event=>{if(externalFiles(event)){event.preventDefault();event.dataTransfer.dropEffect=['library','inbox'].includes(state.page)?'copy':'none';showSystemDrop(event);}});
+document.addEventListener('dragleave',event=>{if(externalFiles(event)){if(!event.relatedTarget&&(event.clientX<=0||event.clientY<=0||event.clientX>=innerWidth||event.clientY>=innerHeight)){clearSystemDrop();return;}state.systemDragDepth=Math.max(0,(state.systemDragDepth||0)-1);if(!state.systemDragDepth)clearSystemDrop();}});
+document.addEventListener('drop',event=>{
+ if(!externalFiles(event))return;event.preventDefault();event.stopImmediatePropagation();
+ const target=event.target.closest('[data-drop-path]'),location={root:root(),path:target?.dataset.dropPath??state.path};
+ // Capture entries and Files synchronously: the drag data store closes after drop.
+ const sources=[...(event.dataTransfer.items||[])].filter(item=>item.kind==='file').map(item=>({entry:item.getAsEntry?.()||item.webkitGetAsEntry?.(),file:item.getAsFile?.()}));const fallback=[...(event.dataTransfer.files||[])];clearSystemDrop();
+ if(!['library','inbox'].includes(state.page)){toast('Open Library or Inbox to upload files.',true);return;}
+ toast('Reading dropped files and folders…');readDropped(sources,fallback).then(({files,directories})=>startUpload(files,directories,location)).catch(error=>toast(error.message,true));
+},true);
+document.addEventListener('keydown',event=>{if(event.key==='Escape')clearSystemDrop();});
+window.addEventListener('blur',clearSystemDrop);
 document.addEventListener('dragstart',event=>{
  const element=event.target.closest('[data-select][draggable="true"]');if(!element||!['library','inbox'].includes(state.page))return;
  const entry=state.entries.find(item=>item.path===element.dataset.select);if(!entry)return;
@@ -431,7 +509,9 @@ document.addEventListener('drop',async event=>{
  catch(error){renderFiles();toast(error.message,true);}
 });
 document.addEventListener('dragend',()=>{if(state.drag)finishDrag();});
-document.addEventListener('change',event=>{
+document.addEventListener('change',async event=>{
+ if(event.target.matches('#upload-files-input,#upload-folder-input')){const files=[...event.target.files].map(file=>({file,path:file.webkitRelativePath||file.name}));event.target.value='';await startUpload(files,[]);return;}
+ if(event.target.id==='delete-inbox-after-import'){state.preferenceEdited=true;const input=event.target,old=state.preferences.delete_inbox_after_import;input.disabled=true;try{state.preferences=await api('/preferences',{method:'PATCH',body:{delete_inbox_after_import:input.checked}});toast(state.preferences.delete_inbox_after_import?'Inbox cleanup enabled. New previews will show the deletion.':'Inbox cleanup disabled.');}catch(error){input.checked=old;toast(error.message,true);}finally{input.disabled=false;}return;}
  if(event.target.id==='transfer-sort'){state.transferSort=event.target.value;renderTransfers();}
  if(event.target.id==='transfer-filter'){state.transferFilter=event.target.value;renderTransfers();}
  if(event.target.id==='history-filter'){state.historyFilter=event.target.value;renderHistory();}
@@ -453,10 +533,11 @@ document.addEventListener('click',async event=>{
   if(button.dataset.downloadTree){event.preventDefault();button.disabled=true;const node=state.searchNodes.get(button.dataset.downloadTree);if(node)await downloadFiles(node,node.files);return;}
   if(button.dataset.downloadFile){event.preventDefault();button.disabled=true;const [g,f]=button.dataset.downloadFile.split(':').map(Number);await downloadFiles(state.groups[g],[state.groups[g].files[f]]);return;}
   if(button.dataset.cancelId){button.disabled=true;await api(`/soulseek/downloads/${encodeURIComponent(button.dataset.cancelUser)}/${button.dataset.cancelId}`,{method:'DELETE'});await loadTransfers(true);return;}
+  if(button.hasAttribute('data-match-again')){matchDialog(button.dataset.matchAgain,false);return;}
   if(button.dataset.release){button.disabled=true;await makePreview(button.dataset.release);return;}
   if(button.dataset.applyPlan){button.disabled=true;const job=await api(`/imports/${button.dataset.applyPlan}/apply`,{method:'POST'});showModal('Importing album',`<div class="loading"><span class="spinner"></span>Writing tags and copying files…</div><p>You can close this window and follow progress in Tasks.</p>`);modal.dataset.jobId=job.id;watchJob(job.id);return;}
   if(button.dataset.cancelJob){button.disabled=true;await api(`/jobs/${button.dataset.cancelJob}/cancel`,{method:'POST'});if(modal.open)modal.close();toast('Task cancelled.');if(state.page==='jobs')await loadJobs();return;}
-  if(button.dataset.showPlan){const job=await api(`/jobs/${button.dataset.showPlan}`);if(job.status==='ready')renderPlan(job);else toast('This preview was already applied or has expired.',true);return;}
+  if(button.dataset.showPlan){const job=await api(`/jobs/${button.dataset.showPlan}`);if(job.status==='ready'){if(job.kind==='match'&&!job.result?.plan)matchDialog(job.source||job.result.source,!job.result.preview_error);else renderPlan(job);}else toast('This preview was already applied or has expired.',true);return;}
   if(button.dataset.undo){button.disabled=true;await api(`/history/${button.dataset.undo}/undo`,{method:'POST'});toast('Operation undone');await loadHistory();return;}
   const action=button.dataset.action;
   if(['new-folder','rename','move'].includes(action))fileDialog(action);
@@ -464,7 +545,11 @@ document.addEventListener('click',async event=>{
   else if(action==='confirm-delete')await confirmDelete(button);
   else if(action==='confirm-move')await confirmMove(button);
   else if(action==='deselect'){state.selected=null;renderFileActions();renderInspector();document.querySelectorAll('.selected').forEach(el=>el.classList.remove('selected'));}
+  else if(action==='upload-files'){button.closest('details').open=false;document.querySelector('#upload-files-input').click();}
+  else if(action==='upload-folder'){button.closest('details').open=false;const input=document.querySelector('#upload-folder-input');if('webkitdirectory' in input)input.click();else toast('This browser cannot select folders. Try dragging a folder from your desktop.',true);}
+  else if(action==='cancel-upload'){if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();if(modal.dataset.upload==='active')modal.close();}}
   else if(action==='match')matchDialog();
+  else if(action==='match-all'){button.disabled=true;const result=await api('/musicbrainz/match-all',{method:'POST',body:{path:state.path}});toast(`${result.queued} albums queued. ${result.skipped_imported} imported · ${result.skipped_matched} already matched · ${result.active} already queued.`);if(result.queued||result.active)await navigate('jobs');else await loadFiles();}
   else if(action==='close-modal')modal.close();
   else if(action==='reload')await navigate(state.page);
   else if(action==='view-grid'||action==='view-list'){state.view=action==='view-grid'?'grid':'list';renderFileList();}

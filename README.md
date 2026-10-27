@@ -7,6 +7,10 @@ another music server.
 ## Features
 
 - Browse Library and Inbox, filter files, inspect tags and play supported audio.
+- Drop files or folders from your computer into either section, or use Upload →
+  Files / Folder. Nested paths are retained; existing files are never overwritten.
+- Inbox shows Matched, Needs review and Imported badges. Match all queues album
+  folders under the current location; each result still requires import approval.
 - Create folders, rename, move and delete files or whole folders in either section.
 - Drag items onto folders or breadcrumbs. Hold over a destination for 650 ms to
   open it without releasing the drag; continue browsing, then drop in the desired
@@ -33,7 +37,8 @@ another music server.
 - Import copies into Library, with a beets catalog and a JSON CLI for automation.
 
 This is an early release. Metadata matching is not audio fingerprint recognition.
-Artwork and non-audio files are not copied automatically. Moves stay within the
+Artwork and non-audio files are not copied automatically. Inbox cleanup is off
+by default and can be enabled in Settings. Moves stay within the
 selected Library or Inbox root. Import is the workflow from Inbox to Library.
 
 ## Quick start
@@ -163,8 +168,8 @@ bundled slskd service and its `depends_on` if they are unnecessary.
 An exact MusicBrainz release MBID or release URL can be entered instead of search.
 Incomplete albums, duplicate targets and existing destination files block import.
 Previews expire after one hour and fingerprint source files. Changed source files
-require a new preview. Original files remain in Inbox; delete them separately
-when no longer needed.
+require a new preview. Original files remain in Inbox by default; optional
+cleanup in Settings is shown explicitly before import.
 
 The current import layout is:
 
@@ -179,12 +184,49 @@ Navidrome sees imports on its next scan. Automatic scan triggering is not includ
 **Downloads → Clear finished** removes succeeded, failed and cancelled transfer
 records from slskd. Files in Inbox and active transfers stay in place.
 
+**Inbox → Match all** discovers album folders recursively under the current
+location, grouping CD1/CD2 folders as one album. It queues up to 200 albums and
+skips imported albums, saved matches and active matching jobs. Matching runs
+sequentially in the background. Review each result in Tasks; strong matches have
+an import preview ready, while ambiguous results let you choose a release.
+No album is imported just by pressing Match all.
+
+Matched/review badges use a saved snapshot of track paths, sizes and modification
+times; changing files invalidates the saved match. Import provenance is committed
+with the beets catalog and survives task cleanup and manager restarts. Moves
+through the manager keep it in sync. Imports made before provenance tracking was
+introduced cannot be reliably labelled retroactively. External moves may require
+matching again.
+
+**Settings → Delete Inbox folder after import** enables optional cleanup. New
+previews name the source folder and explain that all contents, including artwork,
+will be permanently deleted after copying and cataloging succeeds. Changing the
+setting requires a new preview. A changed source folder is kept; a cleanup failure
+reports a warning while retaining the successful Library import. Inbox originals
+are kept when the option is off.
+
 **Tasks → Reject** discards a preview awaiting approval. **Cancel** discards queued
 or running preview work; a network request already underway may finish, but its
 result cannot become importable. An import already copying/tagging files must
 finish. **Clear finished** hides completed, applied, failed, cancelled, expired
 and interrupted tasks. It keeps ready previews and active tasks; operation history
 is retained. Cleared task IDs remain readable by polling clients.
+
+## Uploads
+
+Drop files or folders onto the Library/Inbox page or a destination folder. The
+Upload menu also provides file and folder pickers. Directory selection/drop
+support depends on the browser; Chromium, Firefox and Safari support common
+folder workflows. File selection is available as a fallback.
+
+Uploads preserve relative paths, including empty folders when provided by the
+browser's drop API. Limits are 10,000 files and 10,000 folder entries per upload,
+50 GiB per file and four concurrent upload sessions. Files stream to temporary
+staging on disk, then publish without overwriting existing files. An interrupted
+or cancelled upload does not publish partial files; abandoned staging is removed
+on expiry or server restart. Keep the page open until the upload finishes.
+Uploaded Library files are available directly to Navidrome on its next scan;
+Inbox uploads can be matched and imported as usual.
 
 ## CLI and API
 

@@ -53,6 +53,8 @@ def parser():
     apply = sub.add_parser("apply", help="Apply a reviewed preview by ID (copies, tags and catalogs files)")
     apply.add_argument("plan_id")
     apply.add_argument("--wait", action="store_true")
+    batch = sub.add_parser("match-all", help="Queue Inbox album matching; each result needs review before import")
+    batch.add_argument("path", nargs="?", default="")
     sub.add_parser("jobs")
     sub.add_parser("clear-jobs", help="Clear finished tasks from the list")
     cancel = sub.add_parser("cancel-job", help="Cancel or reject an album preview")
@@ -139,6 +141,8 @@ def execute(args, client):
         return call("POST", "/soulseek/downloads", {"username": args.user, "files": files})
     if c == "downloads":
         return call("GET", "/soulseek/downloads")
+    if c == "match-all":
+        return call("POST", "/musicbrainz/match-all", {"path": args.path})
     if c == "clear-downloads":
         return call("DELETE", "/soulseek/downloads/completed")
     if c == "clear-jobs":

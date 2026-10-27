@@ -108,8 +108,24 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   and the shared proxy transport. Do not globally monkey-patch sockets.
 - Preview must not modify music. Import applies a reviewed, unexpired plan,
   verifies source fingerprints and publishes files without overwriting destinations.
-- Keep Inbox originals during import. Catalog changes and partial failures must
-  not silently leave files missing or claim an unfinished import succeeded.
+- Keep Inbox originals by default. Optional cleanup must be off until selected in
+  Settings and shown in the reviewed preview, naming the folder and all contents.
+  Delete only after files and catalog commit succeed. Changed folders stay; a
+  cleanup failure must not claim that the Library import failed.
+- Commit Inbox import provenance with the beets catalog. Keep match caches
+  separate from transient task lists, invalidate them when track snapshots change,
+  and distinguish weak suggestions from an identified album.
+- Match all runs sequential jobs, groups disc folders and never auto-imports.
+  Cancellation and cache publication must be one database transaction.
+- System drops upload new files; internal drags move existing archive items.
+  Preserve full folder paths and read all directory-entry batches, including past
+  Chromium's first 100 entries. Do not require HTTPS-only file-system APIs for
+  basic folder drops on a local HTTP deployment.
+- Uploads stream to journalled staging and publish exclusively. Reject unsafe
+  paths, symlinks, duplicates and destination conflicts; clean cancelled/crashed
+  sessions without deleting unrelated archive content.
+- Catalog changes and partial failures must not silently leave files missing or
+  claim an unfinished import succeeded.
 
 ## Development and verification
 

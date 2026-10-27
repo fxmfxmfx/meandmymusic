@@ -207,3 +207,61 @@ test('task rejection and cleanup use real task state and history renders a filte
  await page.screenshot({path:'artifacts/history-timeline.png',fullPage:true,animations:'disabled'});
  assert.deepEqual(errors,[]);
 });
+
+test('system file drop and folder picker upload real files into Library and Inbox without overwriting',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ const localFolder=path.join(directory,'desktop','Local Album');
+ await fs.mkdir(path.join(localFolder,'CD1'),{recursive:true});
+ await fs.writeFile(path.join(localFolder,'CD1','One.flac'),'original local audio');
+ await fs.writeFile(path.join(localFolder,'cover.jpg'),'local cover');
+ await page.locator('[data-nav="inbox"]').click();
+ await page.locator('#upload-folder-input').setInputFiles(localFolder);
+ await waitForFile('inbox/Local Album/CD1/One.flac');await page.locator('#modal').waitFor({state:'hidden'});
+ assert.equal(await fs.readFile(path.join(directory,'inbox/Local Album/CD1/One.flac'),'utf8'),'original local audio');
+ assert.equal(await fs.readFile(path.join(directory,'inbox/Local Album/cover.jpg'),'utf8'),'local cover');
+ await page.locator('[data-nav="library"]').click();
+ await page.evaluate(()=>{
+  const data=new DataTransfer();data.items.add(new File(['dropped audio'],'Dropped.flac',{type:'audio/flac'}));
+  document.querySelector('.browser').dispatchEvent(new DragEvent('drop',{bubbles:true,cancelable:true,dataTransfer:data}));
+ });
+ await waitForFile('music/Dropped.flac');await page.locator('#modal').waitFor({state:'hidden'});
+ assert.equal(await fs.readFile(path.join(directory,'music/Dropped.flac'),'utf8'),'dropped audio');
+ // A second upload with the same name must fail before any archive data changes.
+ await page.locator('#upload-files-input').setInputFiles({name:'Dropped.flac',mimeType:'audio/flac',buffer:Buffer.from('replacement')});
+ await page.locator('#modal .error-box').waitFor();assert.match(await page.locator('#modal').textContent(),/Already exists/);
+ assert.equal(await fs.readFile(path.join(directory,'music/Dropped.flac'),'utf8'),'dropped audio');
+ await page.keyboard.press('Escape');
+ await page.screenshot({path:'artifacts/upload-library.png',fullPage:true,animations:'disabled'});
+ assert.deepEqual(errors,[]);
+});
+
+test('Inbox match badges, Match all task review and cleanup preference survive real page reloads',async()=>{
+ await page.locator('[data-nav="settings"]').click();
+ await page.locator('#delete-inbox-after-import').check();
+ await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('cleanup enabled'));
+ await page.reload();await page.locator('[data-nav="settings"]').click();
+ assert.equal(await page.locator('#delete-inbox-after-import').isChecked(),true);
+ // A ready match task and its persistent cache are seeded in the disposable DB.
+ let jobId;
+ await new Promise((resolve,reject)=>{
+  const script=`import json, time\nfrom pathlib import Path\nfrom app.config import Settings\nfrom app.store import Store\nfrom app.inbox import snapshot\ns=Settings(library=Path(${JSON.stringify(path.join(directory,'music'))}),inbox=Path(${JSON.stringify(path.join(directory,'inbox'))}),state=Path(${JSON.stringify(path.join(directory,'state'))}),password='browser-test-password')\ndigest,_=snapshot(s,'Local Album')\nstore=Store(s.state)\nmatch={'artist':'Local Artist','album':'Local Album','tracks':1,'has_tags':True,'candidates':[{'id':'4e9b3e98-6f40-4b9d-8765-6fa18dd73512','confidence':99}],'recommended_release_id':'4e9b3e98-6f40-4b9d-8765-6fa18dd73512'}\nstore.save_match('Local Album',digest,match)\nj=store.new_job('match','Local Album')\nstore.update_job(j,'ready',{'source':'Local Album','match':match,'plan':{'artist':'Local Artist','album':'Local Album','confidence':99,'rows':[],'created':time.time(),'source':'Local Album','delete_source':True}})\nprint(j)`;
+  const child=spawn(process.env.MMM_TEST_PYTHON||'python',['-c',script],{stdio:['ignore','pipe','pipe']});
+  let log='',out='';child.stderr.on('data',data=>log+=data);child.stdout.on('data',data=>out+=data);child.on('exit',code=>{if(code)reject(new Error(log));else{jobId=out.trim();resolve();}});
+ });
+ await page.locator('[data-nav="inbox"]').click();
+ assert.match(await page.locator('[data-select="Local Album"]').textContent(),/Matched/);
+ await page.route('**/api/musicbrainz/match-all',route=>route.fulfill({json:{queued:1,skipped_imported:0,skipped_matched:0,active:0,jobs:[{id:jobId}]}}));
+ try{
+  await page.locator('[data-action="match-all"]').click();await page.locator(`[data-show-plan="${jobId}"]`).click();
+  assert.match(await page.locator('.cleanup-warning').textContent(),/Inbox\/Local Album.*everything inside/);
+  assert.match(await page.locator('[data-apply-plan]').textContent(),/Import & delete Inbox folder/);
+  await page.locator('#modal [data-cancel-job]').click();await page.locator('#modal').waitFor({state:'hidden'});
+  assert.ok(await exists('inbox/Local Album/CD1/One.flac'));
+ }finally{await page.unroute('**/api/musicbrainz/match-all');}
+ await page.locator('[data-nav="inbox"]').click();
+ await page.screenshot({path:'artifacts/inbox-matched.png',fullPage:true,animations:'disabled'});
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.screenshot({path:'artifacts/inbox-matched-mobile.png',fullPage:true,animations:'disabled'});
+ assert.deepEqual(errors,[]);
+});

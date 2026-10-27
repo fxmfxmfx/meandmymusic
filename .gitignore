@@ -11,3 +11,5 @@ artifacts/
 pytest-of-root/
 /pip-*/
 /tmp*
+
+/compose.override.yaml

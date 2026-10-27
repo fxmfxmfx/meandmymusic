@@ -1,5 +1,6 @@
 """Beets matches and writes metadata; imports always copy and keep the inbox intact."""
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -14,6 +15,7 @@ import musicbrainzngs
 
 from app.files import AUDIO, operation_lock, safe_path
 from app.integrations import musicbrainz_lock
+from app.inbox import PROVENANCE, snapshot
 from app.proxy import beets_proxy
 
 PATH_FORMAT = "$albumartist/$year - $album/$disc-$track $title"
@@ -196,7 +198,8 @@ def preview(settings, source, release_id):
                      "after": {key: item.get(key) for key in SUMMARY_FIELDS}, "metadata": metadata})
     return {"source": source, "release_id": release_id, "artist": match.info.artist, "album": match.info.album,
             "confidence": round((1 - float(match.distance)) * 100, 1), "rows": rows,
-            "created": time.time(), "mode": "copy"}
+            "created": time.time(), "mode": "copy",
+            "inbox_snapshot": snapshot(settings, source, audio_only=False)[0]}
 
 
 def apply_import(settings, plan):
@@ -229,7 +232,13 @@ def apply_import(settings, plan):
                 item.write(path=str(temp))
                 item.path = os.fsencode(dst)
                 item.mtime = temp.stat().st_mtime
+                stat = src.stat()
+                item[PROVENANCE] = json.dumps({'source': row['source'], 'size': stat.st_size,
+                                               'mtime_ns': stat.st_mtime_ns, 'sha256': row['fingerprint']['sha256']})
                 items.append(item)
+            for row, src, _ in checked:
+                if fingerprint(src) != row['fingerprint']:
+                    raise ValueError('Source file changed during import. Create a new preview.')
             for temp, (_, _, dst) in zip(staged, checked):
                 os.link(temp, dst)
                 published.append(dst)
@@ -242,8 +251,41 @@ def apply_import(settings, plan):
         finally:
             for temp in staged:
                 temp.unlink(missing_ok=True)
+        cleanup = {'status': 'kept', 'source': plan['source']}
+        if plan.get('delete_source'):
+            # Publishing and catalog commit have succeeded. Cleanup must never
+            # turn a successful import into a failed job or roll back good copies.
+            try:
+                if snapshot(settings, plan['source'], audio_only=False)[0] != plan.get('inbox_snapshot'):
+                    cleanup = {**cleanup, 'status': 'skipped', 'message': 'Inbox folder changed after preview; originals were kept.'}
+                else:
+                    folder = safe_path(settings.inbox, plan['source'], allow_root=False)
+                    shutil.rmtree(folder)
+                    cleanup['status'] = 'deleted'
+            except Exception:
+                cleanup = {**cleanup, 'status': 'failed', 'message': 'Import succeeded, but Inbox cleanup could not finish. Check the source folder and permissions.'}
         return {"album": plan["album"], "artist": plan["artist"], "files": len(items),
-                "destinations": [row["destination"] for row in plan["rows"]]}
+                "destinations": [row["destination"] for row in plan["rows"]], "cleanup": cleanup}
+
+
+def update_inbox_paths(settings, source, destination):
+    """Keep import provenance attached to Inbox sources moved through the UI."""
+    if not (settings.state / 'beets.db').exists():
+        return
+    lib = library(settings)
+    with lib.transaction():
+        for item in lib.items():
+            if not item.get(PROVENANCE):
+                continue
+            data = json.loads(item[PROVENANCE])
+            path = data['source']
+            if path == source or path.startswith(source + '/'):
+                if destination is None:
+                    del item[PROVENANCE]
+                else:
+                    data['source'] = destination + path[len(source):]
+                    item[PROVENANCE] = json.dumps(data)
+                item.store()
 
 
 def update_catalog_paths(settings, source, destination):

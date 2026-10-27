@@ -53,7 +53,7 @@ def search_releases(query, outbound_proxy=""):
             proxy = parse_proxy(outbound_proxy)
             response = httpx.get("https://musicbrainz.org/ws/2/release/",
                                  params={"query": query, "fmt": "json", "limit": 15},
-                                 headers={"User-Agent": "meandmymusic/0.5 (https://github.com/fxmfxmfx/meandmymusic)"}, timeout=25, proxy=proxy.url if proxy else None, trust_env=False)
+                                 headers={"User-Agent": "meandmymusic/0.6 (https://github.com/fxmfxmfx/meandmymusic)"}, timeout=25, proxy=proxy.url if proxy else None, trust_env=False)
             response.raise_for_status()
             return [{"id": r["id"], "title": r.get("title", ""), "date": r.get("date", ""),
                      "artist": "".join(a.get("name", a.get("artist", {}).get("name", "")) + a.get("joinphrase", "") for a in r.get("artist-credit", []) if isinstance(a, dict)),

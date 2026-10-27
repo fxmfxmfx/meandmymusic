@@ -16,7 +16,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, SecretStr
+from pydantic import BaseModel, Field, SecretStr, StrictBool
 
 from app.config import Settings
 from app.accounts import SoulseekAccount
@@ -24,7 +24,9 @@ from app.errors import ConnectionFailure
 from app.files import AUDIO, audio_metadata, list_directory, move, delete, operation_lock, safe_path
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
-from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths
+from app.uploads import Uploads
+from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths, update_inbox_paths
+from app.inbox import annotate as annotate_inbox, snapshot, album_paths, imported_sources
 
 STATIC = Path(__file__).parent / "static"
 Root = Literal["library", "inbox"]
@@ -70,6 +72,26 @@ class AlbumMatch(BaseModel):
     album: str | None = Field(default=None, max_length=300)
 
 
+class MatchAll(BaseModel):
+    path: str = Field(default='', max_length=4096)
+
+
+class UploadFileSpec(BaseModel):
+    path: str = Field(min_length=1, max_length=4096)
+    size: int = Field(ge=0, le=50 * 1024**3)
+
+
+class UploadManifest(BaseModel):
+    root: Root
+    path: str = Field(default='', max_length=4096)
+    files: list[UploadFileSpec] = Field(default_factory=list, max_length=10000)
+    directories: list[str] = Field(default_factory=list, max_length=10000)
+
+
+class Preferences(BaseModel):
+    delete_inbox_after_import: StrictBool
+
+
 class SoulseekCredentials(BaseModel):
     username: str = Field(min_length=1, max_length=255, repr=False)
     password: SecretStr = Field(min_length=1, max_length=512)
@@ -81,6 +103,7 @@ def create_app(settings=None):
     settings = settings or Settings()
     settings.prepare()
     store = Store(settings.state)
+    uploads = Uploads(settings)
     soulseek = Soulseek(settings)
     account = SoulseekAccount(settings, soulseek)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beets")
@@ -104,8 +127,9 @@ def create_app(settings=None):
             with suppress(asyncio.CancelledError):
                 await restore_task
             worker.shutdown(wait=True)
+            uploads.close()
 
-    app = FastAPI(title="meandmymusic", version="0.5.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.6.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
 
@@ -150,14 +174,50 @@ def create_app(settings=None):
     def root(name):
         return settings.library if name == "library" else settings.inbox
 
-    def run_job(kind, function, *args, plan_id=None):
-        job_id = store.new_job(kind)
+    def prepare_preview(settings, source, release_id):
+        delete_source = store.preferences()['delete_inbox_after_import']
+        digest, _ = snapshot(settings, source)
+        result = preview(settings, source, release_id)
+        result['delete_source'] = delete_source
+        if digest != snapshot(settings, source)[0]:
+            raise HTTPException(409, 'Inbox folder changed while preparing the preview. Try again.')
+        old = store.matches().get(source)
+        match = dict(old['result']) if old and old['signature'] == digest else {
+            'artist': result.get('artist', ''), 'album': result.get('album', ''),
+            'tracks': len(result['rows']), 'has_tags': True, 'candidates': [], 'warnings': []}
+        match['selected_release_id'] = release_id
+        result['match_signature'], result['match_result'] = digest, match
+        return result
+
+    def perform_match(settings, source, artist=None, album=None):
+        digest, _ = snapshot(settings, source)
+        result = match_album(settings, source, artist, album)
+        if digest != snapshot(settings, source)[0]:
+            raise HTTPException(409, 'Inbox folder changed while matching. Try again.')
+        return digest, result
+
+    def prepare_match(settings, source):
+        digest, result = perform_match(settings, source)
+        plan, preview_error = None, None
+        if result.get('recommended_release_id'):
+            try:
+                plan = prepare_preview(settings, source, result['recommended_release_id'])
+            except ValueError as error:
+                preview_error = str(error)
+        if digest != snapshot(settings, source)[0]:
+            raise HTTPException(409, 'Inbox folder changed while matching. Try again.')
+        return {'source': source, 'signature': digest, 'match': result, 'plan': plan, 'preview_error': preview_error}
+
+    def run_job(kind, function, *args, plan_id=None, job_source=None):
+        job_id = store.new_job(kind, job_source)
         def execute():
             if not store.start_job(job_id):
                 return
             try:
                 result = function(settings, *args)
-                store.finish_job(job_id, "ready" if kind == "preview" else "done", result=result)
+                record = (job_source, result['signature'], result['match']) if kind == 'match' else (
+                    (job_source, result['match_signature'], result['match_result']) if kind == 'preview' and result.get('match_result') else None)
+                store.finish_job(job_id, "ready" if kind in {'preview', 'match'} else "done", result=result, match_record=record)
                 if kind == "import":
                     store.update_job(plan_id, "applied")
                     store.event("import", result)
@@ -175,7 +235,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.5.0"}
+        return {"status": "ok", "version": "0.6.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -212,7 +272,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.5.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.6.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -253,9 +313,40 @@ def create_app(settings=None):
     def session():
         return {"authenticated": True}
 
+    @app.get('/api/preferences')
+    def preferences():
+        return store.preferences()
+
+    @app.patch('/api/preferences')
+    def set_preferences(data: Preferences):
+        return store.set_preferences(data.model_dump())
+
     @app.get("/api/files")
     def files(root: Root = "library", path: str = ""):
-        return list_directory(settings.library if root == "library" else settings.inbox, path)
+        with operation_lock:
+            listing = list_directory(settings.library if root == "library" else settings.inbox, path)
+            return annotate_inbox(settings, listing, store) if root == 'inbox' else listing
+
+    @app.post('/api/uploads')
+    def begin_upload(data: UploadManifest):
+        if not data.files and not data.directories:
+            raise HTTPException(400, 'Choose files or a folder to upload')
+        return uploads.begin(data.root, data.path, [f.model_dump() for f in data.files], data.directories)
+
+    @app.put('/api/uploads/{upload_id}/{index}')
+    async def receive_upload(upload_id: UUID, index: int, request: Request):
+        return await uploads.receive(str(upload_id), index, request)
+
+    @app.post('/api/uploads/{upload_id}/complete')
+    def complete_upload(upload_id: UUID):
+        result = uploads.complete(str(upload_id))
+        store.event('upload', result)
+        return result
+
+    @app.delete('/api/uploads/{upload_id}')
+    def cancel_upload(upload_id: UUID):
+        uploads.discard(str(upload_id))
+        return {'ok': True}
 
     @app.get("/api/metadata")
     def metadata(root: Root, path: str):
@@ -296,6 +387,14 @@ def create_app(settings=None):
                 except Exception:
                     move(root(data.root), data.destination, data.source)
                     raise HTTPException(500, "Could not update the beets catalog. Move rolled back.")
+            else:
+                try:
+                    update_inbox_paths(settings, data.source, data.destination)
+                    store.move_matches(data.source, data.destination)
+                except Exception:
+                    move(settings.inbox, data.destination, data.source)
+                    update_inbox_paths(settings, data.destination, data.source)
+                    raise HTTPException(500, 'Could not update Inbox status. Move rolled back.') from None
             store.event("move", {"root": data.root, **result})
             return {"ok": True}
 
@@ -305,6 +404,9 @@ def create_app(settings=None):
             result = delete(root(data.root), data.path)
             if data.root == "library":
                 remove_catalog_paths(settings, settings.library / data.path)
+            else:
+                update_inbox_paths(settings, data.path, None)
+                store.delete_matches(data.path)
             store.event("delete", {"root": data.root, **result})
             return {"ok": True}
 
@@ -333,6 +435,14 @@ def create_app(settings=None):
                     except Exception:
                         move(root(data["root"]), data["source"], data["destination"])
                         raise HTTPException(500, "Could not update the catalog. Undo failed.")
+                else:
+                    try:
+                        update_inbox_paths(settings, data['destination'], data['source'])
+                        store.move_matches(data['destination'], data['source'])
+                    except Exception:
+                        move(settings.inbox, data['source'], data['destination'])
+                        update_inbox_paths(settings, data['source'], data['destination'])
+                        raise HTTPException(500, 'Could not update Inbox status. Undo failed.') from None
             elif event["kind"] == "mkdir":
                 try:
                     safe_path(root(data["root"]), data["path"], allow_root=False).rmdir()
@@ -387,12 +497,37 @@ def create_app(settings=None):
     @app.post("/api/imports/preview")
     def preview_import(data: Preview):
         safe_path(settings.inbox, data.path, allow_root=False)
-        return run_job("preview", preview, data.path, str(data.release_id))
+        return run_job("preview", prepare_preview, data.path, str(data.release_id), job_source=data.path)
+
+    @app.post('/api/musicbrainz/match-all')
+    def match_all(data: MatchAll):
+        with operation_lock:
+            paths = album_paths(settings, data.path)
+            imports, cached = imported_sources(settings), store.matches()
+            jobs, skipped_imported, skipped_matched, active = [], 0, 0, 0
+            for path in paths:
+                digest, rows = snapshot(settings, path)
+                if rows and all(source in imports and imports[source]['size'] == size and imports[source]['mtime_ns'] == mtime
+                                for source, size, mtime, _ in rows):
+                    skipped_imported += 1
+                elif path in cached and cached[path]['signature'] == digest and (cached[path]['result'].get('candidates') or cached[path]['result'].get('selected_release_id') or cached[path]['result'].get('recommended_release_id')):
+                    skipped_matched += 1
+                elif store.active_match(path):
+                    active += 1
+                else:
+                    jobs.append(run_job('match', prepare_match, path, job_source=path))
+            return {'jobs': jobs, 'queued': len(jobs), 'skipped_imported': skipped_imported, 'skipped_matched': skipped_matched, 'active': active}
 
     @app.post("/api/musicbrainz/match")
     def match_metadata(data: AlbumMatch):
         try:
-            return match_album(settings, data.path, data.artist, data.album)
+            digest, _ = snapshot(settings, data.path)
+            cached = store.matches().get(data.path)
+            if data.artist is None and data.album is None and cached and cached['signature'] == digest:
+                return {**cached['result'], 'cached': True}
+            digest, result = perform_match(settings, data.path, data.artist, data.album)
+            store.save_match(data.path, digest, result)
+            return result
         except ValueError as error:
             raise HTTPException(400, str(error)) from None
         except HTTPException:
@@ -403,11 +538,16 @@ def create_app(settings=None):
     @app.post("/api/imports/{plan_id}/apply")
     def import_album(plan_id: UUID):
         plan = store.get_job(str(plan_id))
-        if not plan or plan["status"] != "ready" or plan["kind"] != "preview" or not plan["result"]:
+        if not plan or plan["status"] != "ready" or plan["kind"] not in {'preview', 'match'} or not plan["result"]:
             raise HTTPException(409, "Create a new preview first")
+        result = plan['result'].get('plan') if plan['kind'] == 'match' else plan['result']
+        if not result:
+            raise HTTPException(409, 'Review the match and choose a release first')
+        if bool(result.get('delete_source')) != store.preferences()['delete_inbox_after_import']:
+            raise HTTPException(409, 'Import cleanup setting changed. Create a new preview before importing.')
         if not store.claim_plan(str(plan_id)):
             raise HTTPException(409, "This preview is already in use")
-        return run_job("import", apply_import, plan["result"], plan_id=str(plan_id))
+        return run_job("import", apply_import, result, plan_id=str(plan_id), job_source=result['source'])
 
     @app.get("/api/jobs")
     def jobs():

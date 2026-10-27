@@ -23,8 +23,10 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
   const plan = {id:planId, kind:'preview', status:'ready', created:1700000000, result:{
     artist:'Test Artist', album:'Test Album', confidence:98, rows:[{source:'Album/01.wav', destination:'Test Artist/2026 - Test Album/1-01 Track.wav',
       before:{title:'Old title', artist:'Unknown'}, after:{title:'Correct title', artist:'Test Artist',album:'Test Album',year:2026,disc:1,track:1,tracktotal:1}}]}};
-  let transfers=scenario.transfers||[], jobs=[plan], events=scenario.events||[];
-  let entries = [folder('Artist <script>'), folder('Second Artist'), file('Song.wav')];
+  let transfers=scenario.transfers||[], jobs=[plan], events=scenario.events||[], preferences={delete_inbox_after_import:Boolean(scenario.cleanup)};
+  if(scenario.cleanup){plan.result.delete_source=true;plan.result.source='Album';}
+  if(scenario.matchJob){plan.kind='match';plan.source='Artist <script>';plan.result={source:plan.source,plan:plan.result};}
+  let entries = scenario.entries||[folder('Artist <script>'), folder('Second Artist'), file('Song.wav')];
   let account = {managed:true,api_reachable:true,logged_in:false,saved:false,busy:false,error:null};
   window.fetch = async (url, options={}) => {
     const path = new URL(url, window.location.origin);
@@ -34,6 +36,8 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     let result = {}, status = 200;
     if(path.pathname==='/api/session') {result={authenticated};if(!authenticated)status=401;}
     else if(path.pathname==='/api/login') {authenticated=true;result={ok:true};}
+    else if(path.pathname==='/api/preferences'){if(method==='PATCH')preferences=body;result=preferences;}
+    else if(path.pathname==='/api/musicbrainz/match-all')result={queued:1,jobs:[{id:planId}],skipped_imported:1,skipped_matched:1,active:0};
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
     else if(path.pathname==='/api/soulseek/auth/status') result=account;
     else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Signed in'};}}
@@ -60,7 +64,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     return {ok:status<400,status,json:async()=>result};
   };
   window.eval(fs.readFileSync('app/static/theme.js','utf8'));
-  window.eval(code+'\nwindow.testPollTransfers=loadTransfers;window.testPollSearch=pollSearch;');
+  window.eval(code+'\nwindow.testPollTransfers=loadTransfers;window.testPollSearch=pollSearch;window.testReadDropped=readDropped;');
   await tick();
   const click = selector => {
     const target=window.document.querySelector(selector);
@@ -375,6 +379,55 @@ test('history uses a dated timeline with a filter, escaped paths and undo only f
   assert.match(f.window.document.querySelector('.history-detail').textContent,/<script>/);
   const filter=f.window.document.querySelector('#history-filter');filter.value='delete';filter.dispatchEvent(new f.window.Event('change',{bubbles:true}));
   assert.equal(f.window.document.querySelectorAll('.history-event').length,1);assert.match(f.window.document.querySelector('.history-detail').textContent,/Old Album/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('Inbox badges appear in grid, list and details while Match all queues the current folder',async()=>{
+ const processed={...folder('Matched Album'),processing:{audio_files:2,matched_files:2,imported_files:2,imported:true,match:'matched'}};
+ const review={...folder('Review Album'),processing:{audio_files:2,matched_files:0,imported_files:0,imported:false,match:'review'}};
+ const f=await fixture(true,null,{}, {entries:[processed,review]});
+ try{
+  f.click('[data-nav="inbox"]');await tick();
+  assert.match(f.window.document.querySelector('.folder-card').textContent,/Imported/);
+  assert.match(f.window.document.querySelector('.folder-card').textContent,/Matched/);
+  assert.match(f.window.document.querySelectorAll('.folder-card')[1].textContent,/Needs review/);
+  f.click('.folder-card');assert.match(f.window.document.querySelector('#inspector').textContent,/Imported/);
+  f.click('[data-action="view-list"]');assert.match(f.window.document.querySelector('.file-row').textContent,/Imported/);
+  f.click('[data-action="match-all"]');await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/musicbrainz/match-all'&&c.body.path===''));
+  assert.match(f.window.document.querySelector('h1').textContent,/Tasks/);
+  assert.ok(!f.calls.some(c=>c.path.endsWith('/apply')));
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('cleanup switch persists and a batch preview names the folder before its explicit import action',async()=>{
+ const f=await fixture(true,null,{}, {cleanup:true,matchJob:true});
+ try{
+  f.click('[data-nav="settings"]');await tick();
+  const input=f.window.document.querySelector('#delete-inbox-after-import');assert.equal(input.checked,true);
+  input.checked=false;input.dispatchEvent(new f.window.Event('change',{bubbles:true}));await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/preferences'&&c.method==='PATCH'&&c.body.delete_inbox_after_import===false));
+  f.click('[data-nav="jobs"]');await tick();f.click(`[data-show-plan="${planId}"]`);await tick();
+  assert.match(f.window.document.querySelector('.cleanup-warning').textContent,/Inbox\/Album.*everything inside/);
+  assert.match(f.window.document.querySelector('[data-apply-plan]').textContent,/Import & delete Inbox folder/);
+  assert.ok(!f.calls.some(c=>c.path.endsWith('/apply')));
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('folder drop reader retains nested and empty folders and reads every page beyond 100 entries',async()=>{
+ const f=await fixture();
+ try{
+  const entry=(name)=>({name,isFile:true,file(resolve){resolve(new f.window.File(['x'],name));}});
+  const empty={name:'Empty',isDirectory:true,createReader(){return {readEntries(resolve){resolve([]);}};}};
+  const nested={name:'Disc',isDirectory:true,createReader(){let page=0;return {readEntries(resolve){resolve(page++===0?[entry('Nested.flac')]:[]);}};}};
+  const album={name:'Album',isDirectory:true,createReader(){let page=0;return {readEntries(resolve){resolve(page++===0?Array.from({length:100},(_,i)=>entry(`${i}.flac`)):page===2?[entry('100.flac'),empty,nested]:[]);}};}};
+  const result=await f.window.testReadDropped([{entry:album}],[]);
+  assert.equal(result.files.length,102);
+  assert.ok(result.files.some(file=>file.path==='Album/Disc/Nested.flac'));
+  assert.deepEqual([...result.directories],['Album','Album/Empty','Album/Disc']);
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });

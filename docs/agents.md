@@ -23,6 +23,7 @@ filesystem access or SSH to the music server. Configure `MMM_URL` and
 | `releases QUERY` | Text search for MusicBrainz editions |
 | `preview INBOX_PATH --release RELEASE_UUID [--wait]` | Match an exact edition and preview changes |
 | `apply PLAN_UUID [--wait]` | Apply a reviewed plan by copying and tagging |
+| `match-all [INBOX_PATH]` | Queue album matching; review results before import |
 | `jobs` / `job JOB_UUID [--wait]` | Background task status |
 | `cancel-job JOB_UUID` | Cancel/reject a preview; no import occurs |
 | `clear-jobs` | Hide finished tasks; keep active tasks and ready previews |
@@ -74,7 +75,9 @@ in `result`. `POST /api/imports/ID/apply` returns a **new** import task ID. Its 
 successful status is `done`; the original preview becomes `applied`.
 
 Previews expire after an hour and verify source SHA-256 fingerprints. Changed
-sources need a new preview. Originals remain in Inbox.
+sources need a new preview. Originals remain in Inbox by default. Inspect
+`result.delete_source` before apply: a reviewed cleanup-enabled preview removes
+the whole source folder after a successful import.
 
 `DELETE /api/files` accepts `{"root":"inbox","path":"Album"}` (or `library`). It
 permanently deletes a file or an entire folder, including its contents. The UI
@@ -93,3 +96,25 @@ polling clients; cleanup does not change operation history or files.
 
 `DELETE /api/soulseek/downloads/completed` clears terminal slskd transfer records
 without removing downloaded files. Active transfers remain in the queue.
+
+`POST /api/musicbrainz/match-all` accepts `{"path":""}` for Inbox or a relative
+folder. It returns queued job IDs and counts of imported/matched/active skips.
+A `match` job becomes `ready` with `{match, plan, source}`. If `plan` is present,
+review it and apply the same job ID; otherwise choose a release and create a
+preview. Cancelling matching discards pending worker results. File listings in
+Inbox include per-entry `processing` counts and match/import badges.
+
+`GET /api/preferences` and `PATCH /api/preferences` read/set the strict boolean
+`delete_inbox_after_import` (default false). Cleanup is captured in new previews;
+changing the preference before apply returns 409 and requires a new preview.
+A successful import reports `cleanup.status` as `kept`, `deleted`, `skipped` or
+`failed`; cleanup failure does not mean the Library import failed.
+
+Uploads use an explicit manifest: `POST /api/uploads` with root, destination path,
+files `[{"path":"Album/01.flac","size":123}]` and optional directory paths.
+Stream each file as an octet-stream body to `PUT /api/uploads/ID/INDEX`, then
+`POST /api/uploads/ID/complete` to publish or `DELETE /api/uploads/ID` to cancel.
+Every request uses normal session authentication and request protection. Folder
+paths are relative to the chosen destination, never operating-system paths.
+Conflicts and invalid paths fail without overwriting existing files. Library
+uploads do not automatically tag or add entries to the beets catalog.
