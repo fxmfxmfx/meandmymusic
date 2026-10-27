@@ -1,0 +1,27 @@
+name: MusicBrainz diagnostics
+on:
+  workflow_dispatch:
+    inputs:
+      album:
+        description: Album title
+        required: true
+      artist:
+        description: Optional artist credit
+      tracks:
+        description: JSON array of up to three track titles
+        default: '[]'
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install musicbrainzngs==0.7.1
+      - run: python scripts/diagnose_musicbrainz.py
+        env:
+          DIAG_ALBUM: ${{ inputs.album }}
+          DIAG_ARTIST: ${{ inputs.artist }}
+          DIAG_TRACKS: ${{ inputs.tracks }}
