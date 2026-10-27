@@ -495,6 +495,7 @@ test('single artist and album render whole circles without a hole, with sub-minu
  try{
   const artist=f.window.document.querySelector('.map-artist'),album=f.window.document.querySelector('.map-album');
   assert.equal((artist.getAttribute('d').match(/ A /g)||[]).length,2);
+  assert.doesNotMatch(artist.getAttribute('d'),/L 220 220/,'A single artist has no radial seam');
   assert.equal((album.getAttribute('d').match(/ A /g)||[]).length,4);
   assert.doesNotMatch(artist.getAttribute('d'),/NaN|Infinity/);
   artist.dispatchEvent(new f.window.MouseEvent('click',{bubbles:true}));

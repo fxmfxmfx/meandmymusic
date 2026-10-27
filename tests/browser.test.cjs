@@ -296,8 +296,9 @@ test('Library duration map reads actual audio tags, supports pointer hover and t
   const child=spawn(process.env.MMM_TEST_PYTHON||'python',['-c',script],{stdio:['ignore','ignore','pipe']});let log='';child.stderr.on('data',data=>log+=data);child.on('exit',code=>code?reject(new Error(log)):resolve());
  });
  await page.locator('[data-nav="library"]').click();
- await page.waitForFunction(async()=>{await loadLibraryMap(true);return state.libraryStats?.artists?.some(a=>a.name==='Aurora');},null,{polling:300});
- await page.waitForFunction(()=>!state.libraryStats?.scanning);
+ await page.locator('#library-map').waitFor();
+ await page.evaluate(()=>loadLibraryMap(true));
+ await page.waitForFunction(()=>document.querySelectorAll('.map-artist').length===2&&!state.libraryStats?.scanning);
  assert.equal(await page.locator('.map-artist').count(),2);
  assert.equal(await page.locator('.map-album').count(),3);
  assert.match(await page.locator('#map-summary').textContent(),/1 min 30 sec · 3 tracks/);

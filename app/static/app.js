@@ -107,7 +107,7 @@ function mapSector(start,end,inner,outer){
   const parts=Math.abs(to-from)>Math.PI*1.999999?2:1;let path='';
   for(let i=1;i<=parts;i++){const a=from+(to-from)*i/parts;path+=` A ${r} ${r} 0 ${Math.abs((to-from)/parts)>Math.PI?1:0} ${clockwise} ${point(r,a)}`;}return path;
  };
- return `M ${point(outer,start)}${arc(outer,start,end,1)}${inner?` L ${point(inner,end)}${arc(inner,end,start,0)}`:' L 220 220'} Z`;
+ return `M ${point(outer,start)}${arc(outer,start,end,1)}${inner?` L ${point(inner,end)}${arc(inner,end,start,0)}`:end-start>Math.PI*1.999999?'':' L 220 220'} Z`;
 }
 function libraryMapShell(){
  return `<details class="library-map" id="library-map" ${state.mapOpen===false?'':'open'}><summary><span>${icon('disc')}Library map</span><span class="map-summary" id="map-summary">Duration by artist and album</span>${icon('arrow')}</summary><div id="library-map-body"></div></details>`;
