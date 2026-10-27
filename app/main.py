@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 from uuid import UUID
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.exception_handlers import request_validation_exception_handler
 from fastapi.responses import FileResponse, JSONResponse
@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field, SecretStr, StrictBool
 from app.config import Settings
 from app.accounts import SoulseekAccount
 from app.errors import ConnectionFailure
-from app.files import AUDIO, audio_metadata, list_directory, move, delete, operation_lock, safe_path
+from app.files import AUDIO, audio_metadata, list_directory, search_library, move, delete, operation_lock, safe_path
 from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
 from app.uploads import Uploads
@@ -138,7 +138,7 @@ def create_app(settings=None):
             uploads.close()
             library_stats.close()
 
-    app = FastAPI(title="meandmymusic", version="0.7.2", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.8.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
     app.state.library_stats = library_stats
@@ -251,7 +251,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.7.2"}
+        return {"status": "ok", "version": "0.8.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -288,7 +288,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.7.2", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.8.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -340,6 +340,12 @@ def create_app(settings=None):
     @app.get('/api/library/stats')
     def library_statistics():
         return library_stats.get()
+
+    @app.get('/api/library/search')
+    def library_search(q: str = Query(min_length=1, max_length=300),
+                       offset: int = Query(default=0, ge=0, le=1_000_000),
+                       limit: int = Query(default=200, ge=1, le=500)):
+        return search_library(settings.library, q, offset=offset, limit=limit)
 
     @app.post('/api/library/stats/refresh')
     def refresh_library_statistics():

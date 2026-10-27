@@ -125,7 +125,7 @@ test('permanent deletion confirms the target and deletes nested Inbox contents',
  assert.equal(await exists('inbox/Delete Album'),false);
  await page.locator('#file-list .empty').waitFor();
  assert.equal(await page.locator('.browser-toolbar').isVisible(),false);
- assert.equal(await page.locator('.file-toolbar #file-filter').count(),1);
+ assert.equal(await page.locator('#file-filter').count(),0);
  await page.screenshot({path:'artifacts/inbox-toolbar.png',fullPage:true,animations:'disabled'});
  assert.deepEqual(errors,[]);
 });
@@ -310,7 +310,8 @@ test('Library total time reads actual audio and stays compact on desktop and mob
  await page.locator('#library-time-value').waitFor();
  await page.evaluate(()=>loadLibraryTime(true));
  await page.waitForFunction(()=>document.querySelector('#library-time-value')?.textContent==='1 min 30 sec'&&!state.libraryStats?.scanning);
- assert.equal(await page.locator('.browser-toolbar .library-time').textContent(),'Total library time1 min 30 sec');
+ assert.equal(await page.locator('.page-heading h1').textContent(),'Library (1 min 30 sec)');
+ assert.equal(await page.locator('.library-time').count(),0);
  assert.equal(await page.locator('.browser-toolbar .breadcrumbs').count(),0);
  assert.equal(await page.locator('.file-toolbar #file-filter').count(),1);
  assert.equal(await page.locator('#library-map,.map-chart,#map-filter').count(),0);
@@ -324,5 +325,42 @@ test('Library total time reads actual audio and stays compact on desktop and mob
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
  await page.locator('[data-action="reload"]').click();
  await page.waitForFunction(()=>document.querySelector('#library-time-value')?.textContent==='1 min 30 sec');
+ assert.deepEqual(errors,[]);
+});
+
+test('recursive Library search finds remote folders, renames in place and moves actual nested results',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ const original='Lookup Artist/Record/CD2/Nested Search.flac';
+ for(const name of [original,'Elsewhere/Nested Search.flac']){
+  await fs.mkdir(path.dirname(path.join(directory,'music',name)),{recursive:true});
+  await fs.writeFile(path.join(directory,'music',name),'search fixture audio');
+ }
+ await fs.mkdir(path.join(directory,'music','Lookup Artist','Search Album'),{recursive:true});
+ await page.locator('[data-nav="inbox"]').click();assert.equal(await page.locator('#file-filter').count(),0);
+ await page.locator('[data-nav="library"]').click();await page.locator('#file-filter').fill('Nested Search');
+ await page.locator(`[data-select="${original}"]`).waitFor();
+ await page.waitForFunction(()=>document.querySelectorAll('.file-row').length===2);
+ assert.match(await page.locator(`[data-select="${original}"] .result-path`).textContent(),/Lookup Artist\/Record\/CD2/);
+ await page.locator(`[data-select="${original}"]`).click();await page.locator('[data-action="rename"]').click();
+ await page.locator('#file-value').fill('Renamed Search.flac');await page.locator('#modal button[form="file-operation"]').click();
+ await waitForFile('music/Lookup Artist/Record/CD2/Renamed Search.flac');
+ assert.equal(await exists('music/Renamed Search.flac'),false,'Renaming a result must keep its original parent');
+ await page.locator(`[data-select="${original}"]`).waitFor({state:'detached'});
+ await page.locator('[data-select="Elsewhere/Nested Search.flac"]').click();
+ await page.locator('[data-action="open-containing-folder"]').click();await page.locator('[data-path="Elsewhere"]').waitFor();
+ assert.equal(await page.locator('#file-filter').inputValue(),'');
+ await page.locator('#file-filter').fill('Search Album');await page.locator('[data-select="Lookup Artist/Search Album"]').dblclick();
+ await page.locator('[data-path="Lookup Artist/Search Album"]').waitFor();
+ assert.equal(await page.locator('#file-filter').inputValue(),'');
+ await page.locator('#file-filter').fill('Search');
+ await page.locator('[data-select="Lookup Artist/Record/CD2/Renamed Search.flac"]').waitFor();
+ await page.screenshot({path:'artifacts/library-recursive-search.png',fullPage:true,animations:'disabled'});
+ await page.setViewportSize({width:390,height:844});
+ assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ await page.screenshot({path:'artifacts/library-recursive-search-mobile.png',fullPage:true,animations:'disabled'});
+ await page.setViewportSize({width:1440,height:1000});
+ await page.locator('[data-select="Lookup Artist/Record/CD2/Renamed Search.flac"]').dragTo(page.locator('[data-select="Lookup Artist/Search Album"]'));
+ await waitForFile('music/Lookup Artist/Search Album/Renamed Search.flac');
+ assert.equal(await exists('music/Lookup Artist/Record/CD2/Renamed Search.flac'),false);
  assert.deepEqual(errors,[]);
 });

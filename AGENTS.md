@@ -99,10 +99,14 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   Soulseek connection status belongs in the Soulseek page heading.
 - Library duration statistics count the actual Library tree, not just beets
   imports. Keep scanning in a separate worker, cache unchanged files and exclude
-  hidden staging, symlinks and unreadable durations. Show only Total library time
-  and the total duration at the Library root; keep this summary compact. Root
-  names are already in page headings. Show breadcrumbs only inside folders and
-  keep the file filter alongside file actions.
+  hidden staging, symlinks and unreadable durations. Display the total in the
+  page heading as Library (time), including while browsing nested folders. Root
+  names are already in page headings. Show breadcrumbs only inside folders.
+- Search belongs only to Library and matches file/folder names throughout its
+  entire tree. Keep parent paths visible, paginate additional results and ignore
+  stale responses after a new query or navigation. Clearing the query returns to
+  the browsed folder. Search operations must use the result's full path; rename
+  within its actual parent. Preserve native drag sources when leaving results.
 
 ## Matching and import contracts
 

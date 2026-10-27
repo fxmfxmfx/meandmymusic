@@ -6,8 +6,10 @@ another music server.
 
 ## Features
 
-- Browse Library and Inbox, filter files, inspect tags and play supported audio.
-- See total Library track duration beside the Total library time label.
+- Browse Library and Inbox, inspect tags and play supported audio.
+- Search file and folder names throughout Library, including nested directories.
+  Results show their parent folders and offer Open containing folder.
+- See total Library track duration in the heading: Library (time).
 - Drop files or folders from your computer into either section, or use Upload →
   Files / Folder. Nested paths are retained; existing files are never overwritten.
 - Add an Inbox album directly to a chosen Library folder without MusicBrainz.
@@ -86,12 +88,17 @@ access. Keep `.env` private; never publish it or include it in bug reports.
 
 ## Library time
 
-At the Library root, **Total library time** shows the summed duration of readable
+The **Library (time)** heading shows the summed duration of readable
 tracks, including existing archives, uploads and manual imports. The first count
 runs in the background; unchanged files are cached in application state. Returning
 to Library rechecks the inventory after one minute. The Library Refresh button
 starts an immediate scan after external changes. Inbox, hidden staging, symbolic
 links and unreadable durations are excluded. Audio and tags are kept unchanged.
+
+Search Library matches names across the entire Library even when opened inside
+an album folder. Clear the query to return to the browsed folder; Load more
+results retrieves the next page. Rename, move, delete and playback use each
+result's full path.
 
 ## Soulseek
 

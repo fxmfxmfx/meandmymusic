@@ -4,6 +4,7 @@ import errno
 import threading
 import shutil
 from pathlib import Path
+from stat import S_ISDIR, S_ISREG
 
 from fastapi import HTTPException
 from mutagen import File as AudioFile
@@ -77,6 +78,50 @@ def list_directory(root: Path, relative: str):
             continue
     entries.sort(key=lambda x: (not x["directory"], x["name"].casefold()))
     return {"path": directory.relative_to(root).as_posix(), "entries": entries}
+
+
+def search_library(root: Path, query: str, offset=0, limit=200):
+    """Search names throughout Library; bound each page, not the directory depth."""
+    needle = query.strip().casefold()
+    if not needle:
+        raise HTTPException(400, "Enter a file or folder name")
+    entries, matched, unreadable = [], 0, 0
+
+    def walk_error(_):
+        nonlocal unreadable
+        unreadable += 1
+
+    def result(more=False):
+        return {"query": query.strip(), "entries": entries, "offset": offset,
+                "next_offset": offset + len(entries) if more else None,
+                "unreadable_folders": unreadable}
+
+    for directory, directories, files in os.walk(root, followlinks=False, onerror=walk_error):
+        directories[:] = sorted((name for name in directories if not name.startswith(".")
+                                 and not (Path(directory) / name).is_symlink()), key=lambda name: (name.casefold(), name))
+        for name in directories + sorted(files, key=lambda name: (name.casefold(), name)):
+            if name.startswith(".") or needle not in name.casefold():
+                continue
+            path = Path(directory) / name
+            relative = path.relative_to(root).as_posix()
+            try:
+                with operation_lock:
+                    path = safe_path(root, relative)
+                    info = path.stat()
+                    is_directory = S_ISDIR(info.st_mode)
+                    if not is_directory and not S_ISREG(info.st_mode):
+                        continue
+                    matched += 1
+                    if matched <= offset:
+                        continue
+                    if len(entries) == limit:
+                        return result(more=True)
+                    entries.append({"name": name, "path": relative, "directory": is_directory,
+                                    "size": None if is_directory else info.st_size,
+                                    "modified": info.st_mtime, "audio": not is_directory and path.suffix.lower() in AUDIO})
+            except (OSError, HTTPException):
+                continue
+    return result()
 
 
 def move(root: Path, source: str, destination: str):

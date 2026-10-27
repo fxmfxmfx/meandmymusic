@@ -10,7 +10,7 @@ const html = fs.readFileSync('app/static/index.html', 'utf8');
 const code = fs.readFileSync('app/static/app.js', 'utf8');
 const folder = (name) => ({name, path:name, directory:true, modified:1700000000, size:null});
 const file = (name) => ({name, path:name, directory:false, audio:true, modified:1700000000, size:12345});
-const tick = () => new Promise(resolve => setTimeout(resolve, 20));
+const tick = (ms=20) => new Promise(resolve => setTimeout(resolve, ms));
 
 async function fixture(authenticated=true, authFailure=null, matchOverrides={}, scenario={}) {
   const calls = [], errors = [];
@@ -40,6 +40,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     else if(path.pathname==='/api/preferences'){if(method==='PATCH')preferences=body;result=preferences;}
     else if(path.pathname==='/api/musicbrainz/match-all')result={queued:1,jobs:[{id:planId}],skipped_imported:1,skipped_matched:1,active:0};
     else if(path.pathname==='/api/system') result={slskd:true,beets:true,navidrome_url:''};
+    else if(path.pathname==='/api/library/search') result=scenario.search?await scenario.search(path.searchParams):{query:path.searchParams.get('q'),entries:entries.filter(entry=>entry.name.toLowerCase().includes(path.searchParams.get('q').toLowerCase())),next_offset:null};
     else if(path.pathname==='/api/library/stats'||path.pathname==='/api/library/stats/refresh') result=scenario.stats||{ready:true,scanning:false,duration:0,tracks:0,artists:[],albums:0,skipped:0};
     else if(path.pathname==='/api/soulseek/auth/status') result=account;
     else if(path.pathname==='/api/soulseek/auth/login'||path.pathname==='/api/soulseek/auth/register') {if(authFailure){status=400;account={...account,error:authFailure.message,failure:authFailure};result={detail:authFailure.message,error:authFailure};}else{account={...account,logged_in:true,username:body.username,saved:body.remember};result={...account,message:'Signed in'};}}
@@ -88,7 +89,7 @@ test('login opens the archive, escaped filenames render as text, filter works', 
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,2);
     assert.ok(f.window.document.querySelector('.folder-name').textContent.includes('<script>'));
     assert.equal(f.window.document.querySelector('.browser-toolbar .breadcrumbs'),null);
-    const filter=f.window.document.querySelector('.file-toolbar #file-filter');filter.value='Second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));
+    const filter=f.window.document.querySelector('.file-toolbar #file-filter');filter.value='Second';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,1);
     assert.equal(f.window.document.querySelector('.folder-name').textContent,'Second Artist');
     assert.deepEqual(f.errors,[]);
@@ -456,7 +457,8 @@ test('Library shows only its total duration and refreshes through the existing b
  const f=await fixture(true,null,{}, {stats:{ready:true,scanning:false,duration:600,artists:[{name:'Hidden artist'}]}});
  try{
   const doc=f.window.document;
-  assert.equal(doc.querySelector('.browser-toolbar .library-time').textContent,'Total library time10 min');
+  assert.equal(doc.querySelector('.page-heading h1').textContent,'Library (10 min)');
+  assert.equal(doc.querySelector('.library-time'),null);
   assert.equal(doc.querySelector('.browser-toolbar .breadcrumbs'),null);
   assert.equal(doc.querySelector('#library-map,.map-chart,#map-filter'),null);
   assert.ok(!doc.querySelector('#content').textContent.includes('Hidden artist'));
@@ -465,7 +467,7 @@ test('Library shows only its total duration and refreshes through the existing b
   f.click('[data-nav="inbox"]');await tick();
   assert.equal(doc.querySelector('.library-time'),null);
   assert.equal(doc.querySelector('.browser-toolbar').hidden,true);
-  assert.ok(doc.querySelector('.file-toolbar #file-filter'));
+  assert.equal(doc.querySelector('#file-filter'),null);
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });
@@ -481,4 +483,75 @@ test('Library duration handles hours, short tracks, empty libraries and pending 
   const f=await fixture(true,null,{}, {stats});
   try{assert.equal(f.window.document.querySelector('#library-time-value').textContent,expected);assert.deepEqual(f.errors,[]);}finally{f.close();}
  }
+});
+
+test('recursive Library results show parent paths and rename within the actual source folder',async()=>{
+ const nested={...file('Deep Song.flac'),path:'Artist/Album/CD2/Deep Song.flac'};
+ const f=await fixture(true,null,{}, {search:async()=>({entries:[nested],next_offset:null})});
+ try{
+  const input=f.window.document.querySelector('#file-filter');input.focus();input.value='Deep';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  assert.equal(f.window.document.activeElement,input,'Typing a query keeps focus');
+  assert.equal(f.window.document.querySelector('.result-path').textContent,'Library/Artist/Album/CD2');
+  assert.ok(f.calls.some(c=>c.path==='/api/library/search'&&c.params.get('q')==='Deep'&&!c.params.has('path')));
+  f.click('.file-row');f.click('[data-action="rename"]');f.window.document.querySelector('#file-value').value='Renamed.flac';f.submit('#file-operation');await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/move'&&c.body.source===nested.path&&c.body.destination==='Artist/Album/CD2/Renamed.flac'));
+  f.click('.file-row');f.click('[data-action="open-containing-folder"]');await tick();
+  assert.ok(f.calls.some(c=>c.path==='/api/files'&&c.params.get('path')==='Artist/Album/CD2'));
+  assert.equal(f.window.document.querySelector('#file-filter').value,'');
+  assert.equal(f.window.document.querySelector('.page-heading h1').textContent,'Library (0 min)');
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('recursive Library pagination keeps duplicate names distinct and clearing returns to the browsed folder',async()=>{
+ const f=await fixture(true,null,{}, {search:async params=>({entries:[{...file('Song.flac'),path:params.get('offset')==='1'?'B/Song.flac':'A/Song.flac'}],next_offset:params.get('offset')==='1'?null:1})});
+ try{
+  const input=f.window.document.querySelector('#file-filter');input.value='Song';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  f.click('[data-action="more-library-results"]');await tick();
+  assert.equal(f.window.document.querySelectorAll('.file-row').length,2);
+  assert.ok(f.window.document.querySelector('[data-select="A/Song.flac"]'));
+  assert.ok(f.window.document.querySelector('[data-select="B/Song.flac"]'));
+  assert.equal(f.window.document.querySelector('#file-summary').textContent,'2 results');
+  input.value='';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  assert.equal(f.window.document.querySelectorAll('.folder-card').length,2);
+  assert.equal(f.window.document.querySelector('.library-search-summary'),null);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('late Library search responses cannot overwrite a newer query or the Inbox page',async()=>{
+ let old,late;
+ const f=await fixture(true,null,{}, {search:async params=>{
+  if(params.get('q')==='old')return new Promise(resolve=>old=resolve);
+  if(params.get('q')==='late')return new Promise(resolve=>late=resolve);
+  return {entries:[file('New.flac')],next_offset:null};
+ }});
+ try{
+  const input=f.window.document.querySelector('#file-filter');
+  input.value='old';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  input.value='new';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  old({entries:[file('Old.flac')],next_offset:null});await tick();
+  assert.ok(f.window.document.querySelector('[data-select="New.flac"]'));
+  assert.equal(f.window.document.querySelector('[data-select="Old.flac"]'),null);
+  input.value='late';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  f.click('[data-nav="inbox"]');await tick();
+  late({entries:[file('Late.flac')],next_offset:null});await tick();
+  assert.equal(f.window.document.querySelector('#file-filter'),null);
+  assert.equal(f.window.document.querySelector('h1').textContent,'Inbox');
+  assert.equal(f.window.document.querySelector('[data-select="Late.flac"]'),null);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('Library search failures remain retryable instead of claiming that the archive is empty',async()=>{
+ let failed=true;
+ const f=await fixture(true,null,{}, {search:async()=>{if(failed)throw new Error('Search unavailable');return {entries:[],next_offset:null};}});
+ try{
+  const input=f.window.document.querySelector('#file-filter');input.value='missing';input.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(320);
+  assert.match(f.window.document.querySelector('#file-list').textContent,/Search unavailable/);
+  assert.ok(!f.window.document.querySelector('#file-list').textContent.includes('Library is empty'));
+  failed=false;f.click('[data-action="retry-library-search"]');await tick();
+  assert.match(f.window.document.querySelector('#file-list').textContent,/No results/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
 });

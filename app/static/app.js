@@ -33,6 +33,7 @@ const date = value => new Date(value*1000).toLocaleString('en-GB',{day:'numeric'
 const color = name => [...name].reduce((n,c)=>n+c.charCodeAt(0),0)%5;
 const join = (a,b) => a && a !== '.' ? `${a}/${b}` : b;
 const basename = path => path.split(/[\\/]/).pop();
+const parentPath = path => path.split('/').slice(0,-1).join('/');
 const root = () => state.page === 'inbox' ? 'inbox' : 'library';
 const query = values => new URLSearchParams(values).toString();
 const mediaURL = (path, r=root()) => `/api/media?${query({root:r,path})}`;
@@ -48,6 +49,7 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
+ stopFileSearch();state.fileSearch=null;state.fileSearchError=null;
  clearTimeout(state.libraryTimeTimer);state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;state.libraryStats=null;
  if(state.drag)finishDrag(false);
  clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();}clearSystemDrop();state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
@@ -55,7 +57,7 @@ function showLogin(){
 }
 function shell(){
  state.preferenceEdited=false;
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.7.2</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.8</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
  api('/preferences').then(value=>{if(!document.querySelector('.shell')||state.preferenceEdited)return;state.preferences=value;const checkbox=document.querySelector('#delete-inbox-after-import');if(checkbox)checkbox.checked=value.delete_inbox_after_import;}).catch(error=>toast(error.message,true));
@@ -69,6 +71,7 @@ async function refreshAccount(render=true){
 }
 function heading(number,title,subtitle,actions=''){const titles={'01':'Library','02':'Inbox','03':'Soulseek','04':'Downloads','05':'Tasks','06':'History','07':'Settings'};return `<section class="page-heading"><h1>${titles[number]||title}</h1>${actions?`<div class="heading-actions">${actions}</div>`:''}</section>`;}
 async function navigate(page,refreshTime=false){
+ stopFileSearch();state.fileSearch=null;state.fileSearchError=null;
  clearTimeout(state.libraryTimeTimer);state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;
  rememberTree('search');rememberTree('transfers');state.generation++;const generation=state.generation;
  clearInterval(state.jobTimer);
@@ -85,29 +88,75 @@ async function navigate(page,refreshTime=false){
   else if(page==='settings')renderSettings();
  }catch(error){if(generation===state.generation && document.querySelector('#content'))content.innerHTML=`<div class="error-box">${esc(error.message)}<br><button class="small" data-action="reload">${icon('refresh')} Retry</button></div>`;}
 }
+function stopFileSearch(){
+ clearTimeout(state.fileSearchTimer);state.fileSearchEpoch=(state.fileSearchEpoch||0)+1;
+ state.fileSearchAbort?.abort();state.fileSearchAbort=null;state.fileSearchBusy=false;state.fileSearchMoreBusy=false;
+}
+function fileRequestURL(page,path,term,offset=0){
+ return page==='library'&&term?`/library/search?${query({q:term,offset})}`:`/files?${query({root:page,path})}`;
+}
 async function loadFiles(refreshTime=false){
- const page=state.page, path=state.path;
- const data=await api(`/files?${query({root:root(),path})}`);
- if(state.page!==page||state.path!==path)return;
- state.entries=data.entries;state.path=data.path==='.'?'':data.path;
- state.selected=state.selected?state.entries.find(e=>e.path===state.selected.path)||null:null;
- renderFiles();
- if(page==='library'&&!state.path)loadLibraryTime(refreshTime);else clearTimeout(state.libraryTimeTimer);
+ stopFileSearch();state.fileSearchError=null;
+ const page=state.page,path=state.path,term=page==='library'?state.filter.trim():'',epoch=state.fileSearchEpoch;
+ const controller=state.fileSearchAbort=new AbortController();
+ try{
+  const data=await api(fileRequestURL(page,path,term),{signal:controller.signal});
+  if(epoch!==state.fileSearchEpoch||state.page!==page||state.path!==path)return;
+  state.entries=data.entries;state.fileSearch=term?data:null;
+  if(!term)state.path=data.path==='.'?'':data.path;
+  state.selected=state.selected?state.entries.find(e=>e.path===state.selected.path)||null:null;
+  renderFiles();
+  if(page==='library')loadLibraryTime(refreshTime);else clearTimeout(state.libraryTimeTimer);
+ }catch(error){if(error.name!=='AbortError')throw error;}
+}
+function scheduleLibrarySearch(){
+ if(state.page!=='library')return;
+ stopFileSearch();state.fileSearchError=null;state.fileSearch=null;state.selected=null;state.fileSearchBusy=true;
+ renderFileActions();renderInspector();renderFileList();
+ state.fileSearchTimer=setTimeout(()=>runLibrarySearch(),250);
+}
+async function runLibrarySearch(append=false){
+ if(state.page!=='library')return;
+ const offset=append?state.fileSearch?.next_offset:0;if(append&&offset==null)return;
+ stopFileSearch();const epoch=state.fileSearchEpoch,page=state.page,path=state.path,term=state.filter.trim();
+ const controller=state.fileSearchAbort=new AbortController();
+ state.fileSearchError=null;state.fileSearchBusy=!append;state.fileSearchMoreBusy=append;
+ renderFileList();
+ try{
+  const data=await api(fileRequestURL(page,path,term,offset),{signal:controller.signal});
+  if(epoch!==state.fileSearchEpoch||state.page!==page||state.path!==path||state.filter.trim()!==term)return;
+  state.entries=append?[...new Map([...state.entries,...data.entries].map(entry=>[entry.path,entry])).values()]:data.entries;
+  state.fileSearch=term?data:null;state.fileSearchBusy=false;state.fileSearchMoreBusy=false;
+  state.selected=state.selected?state.entries.find(entry=>entry.path===state.selected.path)||null:null;
+  if(state.drag)renderFiles();else{renderFileList();renderFileActions();renderInspector();}
+ }catch(error){
+  if(error.name==='AbortError'||epoch!==state.fileSearchEpoch)return;
+  state.fileSearchBusy=false;state.fileSearchMoreBusy=false;state.fileSearchError=error.message;
+  if(!append){state.entries=[];state.selected=null;renderFileActions();renderInspector();}
+  renderFileList();
+ }
+}
+function fileSummary(){
+ if(state.fileSearchBusy)return state.filter.trim()?'Searching Library…':'Loading…';
+ return `${state.entries.length} ${state.page==='library'&&state.filter.trim()?'results':'items'}`;
+}
+function searchParent(entry){
+ return state.page==='library'&&state.filter.trim()?`<span class="result-path">${esc(join('Library',parentPath(entry.path)))}</span>`:'';
 }
 function libraryDuration(seconds){
  const total=Math.max(0,Math.round(seconds)),hours=Math.floor(total/3600),minutes=Math.floor(total%3600/60),remaining=total%60;
  return hours?`${hours.toLocaleString('en-GB')} h ${minutes} min`:`${minutes} min${remaining?' '+remaining+' sec':''}`;
 }
 function libraryTimeShell(){
- return '<p class="library-time"><span>Total library time</span><strong id="library-time-value" aria-live="polite">…</strong></p>';
+ return ' <span class="library-heading-time">(<span id="library-time-value" aria-live="polite">…</span>)</span>';
 }
 async function loadLibraryTime(refresh=false){
  clearTimeout(state.libraryTimeTimer);
- if(state.page!=='library'||state.path||!document.querySelector('#library-time-value'))return;
+ if(state.page!=='library'||!document.querySelector('#library-time-value'))return;
  const epoch=state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;
  try{
   const result=await api(refresh?'/library/stats/refresh':'/library/stats',refresh?{method:'POST'}:{});
-  if(state.libraryTimeEpoch!==epoch||state.page!=='library'||state.path)return;
+  if(state.libraryTimeEpoch!==epoch||state.page!=='library')return;
   state.libraryStats=result;renderLibraryTime();
   if(result.scanning)state.libraryTimeTimer=setTimeout(()=>loadLibraryTime(),1000);
  }catch(error){
@@ -129,18 +178,18 @@ function renderFiles(){
   const original=document.querySelector('#file-list');original.classList.add('drag-preserved');
   if(!document.querySelector('#drag-file-list')){const layer=document.createElement('div');layer.id='drag-file-list';original.after(layer);}
   renderFileLocation();document.querySelector('.browser').dataset.dropPath=state.path;
-  document.querySelector('#file-filter').value=state.filter;
+  const filter=document.querySelector('#file-filter');if(filter)filter.value=state.filter;
   renderFileList();return;
  }
  document.querySelector('#content').innerHTML=heading(inbox?'02':'01','','',`<button data-action="reload" class="icon-button" aria-label="Refresh" title="Refresh">${icon('refresh')}</button><button class="primary" data-action="new-folder">${icon('plus')} New folder</button><details class="upload-menu"><summary>${icon('upload')}Upload</summary><div><button data-action="upload-files">Files</button><button data-action="upload-folder">Folder</button></div></details>${inbox?`<button data-action="match-all">${icon('disc')}Match all</button>`:''}`)+
- `<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"></div><div class="file-toolbar"><div class="file-actions" id="file-actions"></div><input class="filter-input" id="file-filter" aria-label="Filter files" placeholder="Filter files…" value="${esc(state.filter)}"></div><div id="file-list"></div><div class="footer-line"><span>${state.entries.length} items</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
+ `<input type="file" id="upload-files-input" multiple hidden><input type="file" id="upload-folder-input" webkitdirectory multiple hidden><div class="workspace${state.selected?' has-selection':''}"><section class="browser" data-drop-path="${esc(state.path)}"><div class="browser-toolbar"></div><div class="file-toolbar"><div class="file-actions" id="file-actions"></div>${inbox?'':`<input type="search" class="filter-input" id="file-filter" aria-label="Search Library" placeholder="Search Library…" maxlength="300" value="${esc(state.filter)}">`}</div><div id="file-list"></div><div class="footer-line"><span id="file-summary">${fileSummary()}</span><span>Drop files or folders to upload · Drag items to move</span></div></section><aside class="inspector" id="inspector" aria-label="File details"></aside></div>`;
+ if(!inbox){document.querySelector('.page-heading h1').insertAdjacentHTML('beforeend',libraryTimeShell());renderLibraryTime();}
  renderFileLocation();renderFileActions();renderFileList();renderInspector();
 }
 function renderFileLocation(){
  const toolbar=document.querySelector('.browser>.browser-toolbar');if(!toolbar)return;
- toolbar.hidden=!state.path&&root()==='inbox';
- toolbar.innerHTML=state.path?`<div class="breadcrumbs">${breadcrumbs()}</div>`:root()==='library'?libraryTimeShell():'';
- if(!state.path&&root()==='library')renderLibraryTime();
+ toolbar.hidden=!state.path;
+ toolbar.innerHTML=state.path?`<div class="breadcrumbs">${breadcrumbs()}</div>`:'';
 }
 function renderFileActions(){
  const el=document.querySelector('#file-actions');if(!el)return;const disabled=state.selected?'':'disabled';
@@ -162,23 +211,32 @@ function processingBadges(entry){
  return labels.length?`<span class="processing-badges">${labels.join('')}</span>`:'';
 }
 function renderFileList(){
- const entries=state.entries.filter(e=>e.name.toLowerCase().includes(state.filter.toLowerCase()));
+ const entries=state.entries,searching=state.page==='library'&&Boolean(state.filter.trim());
  const dirs=entries.filter(e=>e.directory), files=entries.filter(e=>!e.directory);
  const el=document.querySelector(state.drag&&document.querySelector('#drag-file-list')?'#drag-file-list':'#file-list');if(!el)return;
- if(!entries.length){el.innerHTML=`<div class="empty">${icon(state.filter?'search':root()==='inbox'?'inbox':'folder')}<h3>${state.filter?'No results':root()==='inbox'?'Inbox is empty':'Library is empty'}</h3><p>${state.filter?'Try another name.':root()==='inbox'?'Download music from Soulseek or add an album to the Inbox folder.':'Add music to the Library folder or import an album from Inbox.'}</p>${!state.filter?`<button class="primary" data-nav="${root()==='inbox'?'soulseek':'inbox'}">${icon(root()==='inbox'?'search':'inbox')}${root()==='inbox'?'Search Soulseek':'Open Inbox'}</button>`:''}</div>`;return;}
+ const summary=document.querySelector('#file-summary');if(summary)summary.textContent=fileSummary();
+ if(state.fileSearchBusy){el.innerHTML=`<div class="loading"><span class="spinner"></span>${searching?'Searching Library…':'Loading…'}</div>`;return;}
+ if(state.fileSearchError&&!entries.length){el.innerHTML=`<div class="error-box">${esc(state.fileSearchError)} <button class="small" data-action="retry-library-search">Retry</button></div>`;return;}
+
+ if(!entries.length){el.innerHTML=`<div class="empty">${icon(searching?'search':root()==='inbox'?'inbox':'folder')}<h3>${searching?'No results':root()==='inbox'?'Inbox is empty':'Library is empty'}</h3><p>${searching?(state.fileSearch?.unreadable_folders?'Some folders could not be read. Check Library permissions.':'Try another name.'):root()==='inbox'?'Download music from Soulseek or add an album to the Inbox folder.':'Add music to the Library folder or import an album from Inbox.'}</p>${!searching?`<button class="primary" data-nav="${root()==='inbox'?'soulseek':'inbox'}">${icon(root()==='inbox'?'search':'inbox')}${root()==='inbox'?'Search Soulseek':'Open Inbox'}</button>`:''}</div>`;return;}
  let html='';
  if(dirs.length){html=`<div class="section-heading"><h2>Folders <span> / ${dirs.length}</span></h2><div class="view-switch"><button class="${state.view==='grid'?'active':''}" data-action="view-grid" aria-label="Grid">${icon('grid')}</button><button class="${state.view==='list'?'active':''}" data-action="view-list" aria-label="List">${icon('list')}</button></div></div>`;
-  if(state.view==='grid')html+=`<div class="folder-grid">${dirs.map(entry=>`<button class="folder-card ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" data-drop-path="${esc(entry.path)}" title="Click to select, double-click to open"><div class="folder-art color-${color(entry.name)}">${icon('folder')}</div>${state.selected?.path===entry.path?`<span class="selected-mark">${icon('check')}</span>`:''}<div class="folder-name">${esc(entry.name)}</div>${processingBadges(entry)}<div class="folder-meta">Folder · ${date(entry.modified)}</div></button>`).join('')}</div>`;
+  if(state.view==='grid')html+=`<div class="folder-grid">${dirs.map(entry=>`<button class="folder-card ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" data-drop-path="${esc(entry.path)}" title="Click to select, double-click to open"><div class="folder-art color-${color(entry.name)}">${icon('folder')}</div>${state.selected?.path===entry.path?`<span class="selected-mark">${icon('check')}</span>`:''}<div class="folder-name">${esc(entry.name)}</div>${processingBadges(entry)}<div class="folder-meta">${searchParent(entry)}Folder · ${date(entry.modified)}</div></button>`).join('')}</div>`;
   else html+=fileTable(dirs);
  }
  if(files.length)html+=`<div class="section-heading"><h2>Files <span> / ${files.length}</span></h2></div>${fileTable(files)}`;
+ if(state.page==='library'&&state.filter.trim()){
+  html=`<p class="library-search-summary">Files and folders across Library${state.fileSearch?.unreadable_folders?' · Some folders could not be read':''}</p>`+html;
+  if(state.fileSearchError)html+=`<p class="error-box">${esc(state.fileSearchError)}</p>`;
+  if(state.fileSearch?.next_offset!=null)html+=`<button class="small search-more" data-action="more-library-results" ${state.fileSearchMoreBusy?'disabled':''}>${state.fileSearchMoreBusy?'Loading…':'Load more results'}</button>`;
+ }
  el.innerHTML=html;
 }
-function fileTable(entries){return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Format</th><th>Size</th><th></th></tr></thead><tbody>${entries.map(entry=>`<tr class="file-row ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" ${entry.directory?`data-drop-path="${esc(entry.path)}"`:""} tabindex="0"><td><div class="file-title">${icon(entry.directory?'folder':entry.audio?'music':'file')}<div>${esc(entry.name)}${processingBadges(entry)}<small>${date(entry.modified)}</small></div></div></td><td><span class="badge">${entry.directory?'FOLDER':esc(entry.name.split('.').pop().toUpperCase())}</span></td><td class="muted">${size(entry.size)}</td><td>${entry.directory?`<button class="quiet icon-button" data-open="${esc(entry.path)}" aria-label="Open folder">${icon('arrow')}</button>`:entry.audio?`<button class="quiet icon-button" data-play="${esc(entry.path)}" aria-label="Play">${icon('play')}</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;}
+function fileTable(entries){return `<div class="table-wrap"><table><thead><tr><th>Name</th><th>Format</th><th>Size</th><th></th></tr></thead><tbody>${entries.map(entry=>`<tr class="file-row ${state.selected?.path===entry.path?'selected':''}" draggable="true" data-select="${esc(entry.path)}" ${entry.directory?`data-drop-path="${esc(entry.path)}"`:""} tabindex="0"><td><div class="file-title">${icon(entry.directory?'folder':entry.audio?'music':'file')}<div>${esc(entry.name)}${processingBadges(entry)}${searchParent(entry)}<small>${date(entry.modified)}</small></div></div></td><td><span class="badge">${entry.directory?'FOLDER':esc(entry.name.split('.').pop().toUpperCase())}</span></td><td class="muted">${size(entry.size)}</td><td>${entry.directory?`<button class="quiet icon-button" data-open="${esc(entry.path)}" aria-label="Open folder">${icon('arrow')}</button>`:entry.audio?`<button class="quiet icon-button" data-play="${esc(entry.path)}" aria-label="Play">${icon('play')}</button>`:''}</td></tr>`).join('')}</tbody></table></div>`;}
 function renderInspector(){
  const el=document.querySelector('#inspector');if(!el)return;const entry=state.selected;
  document.querySelector('.workspace')?.classList.toggle('has-selection',Boolean(entry));if(!entry){el.innerHTML='';return;}
- el.innerHTML=`<div class="inspector-header"><span>Details</span><button class="quiet icon-button" data-action="deselect" aria-label="Close details">${icon('close')}</button></div><div class="inspector-body"><h3>${esc(entry.name)}</h3>${processingBadges(entry)}<div class="detail-row"><span>Type</span><strong>${entry.directory?'Folder':entry.audio?'Audio':'File'}</strong></div><div class="detail-row"><span>Modified</span><strong>${date(entry.modified)}</strong></div>${!entry.directory?`<div class="detail-row"><span>Size</span><strong>${size(entry.size)}</strong></div>`:''}<div id="audio-metadata"></div>${entry.audio?`<button data-play="${esc(entry.path)}">${icon('play')}Play</button>`:''}</div>`;
+ el.innerHTML=`<div class="inspector-header"><span>Details</span><button class="quiet icon-button" data-action="deselect" aria-label="Close details">${icon('close')}</button></div><div class="inspector-body"><h3>${esc(entry.name)}</h3>${processingBadges(entry)}<div class="detail-row"><span>Type</span><strong>${entry.directory?'Folder':entry.audio?'Audio':'File'}</strong></div><div class="detail-row"><span>Modified</span><strong>${date(entry.modified)}</strong></div>${state.page==='library'&&state.filter.trim()?`<p class="result-path">${esc(join('Library',entry.path))}</p><button class="small" data-action="open-containing-folder">${icon('folder')}Open containing folder</button>`:''}${!entry.directory?`<div class="detail-row"><span>Size</span><strong>${size(entry.size)}</strong></div>`:''}<div id="audio-metadata"></div>${entry.audio?`<button data-play="${esc(entry.path)}">${icon('play')}Play</button>`:''}</div>`;
  if(entry.audio){const selected=entry.path;api(`/metadata?${query({root:root(),path:entry.path})}`).then(tags=>{if(state.selected?.path!==selected)return;const metadata=document.querySelector('#audio-metadata');if(metadata)metadata.innerHTML=[['Artist',tags.artist],['Album',tags.album],['Duration',tags.duration?`${Math.floor(tags.duration/60)}:${String(tags.duration%60).padStart(2,'0')}`:''],['Bitrate',tags.bitrate?`${tags.bitrate} kbps`:'']].filter(([,value])=>value).map(([label,value])=>`<div class="detail-row"><span>${label}</span><strong>${esc(value)}</strong></div>`).join('');}).catch(()=>{});}
 }
 function selectFile(path){state.selected=state.entries.find(e=>e.path===path);document.querySelectorAll('[data-select]').forEach(el=>el.classList.toggle('selected',el.dataset.select===path));renderInspector();renderFileActions();}
@@ -421,7 +479,7 @@ function playFile(path){
  document.querySelector('#player-slot').innerHTML=`<section class="player" aria-label="Player"><div class="player-title">${icon('disc')}<div><strong>${esc(entry?.name||basename(path))}</strong><small>Library audio</small></div></div><audio id="audio-player" controls autoplay src="${esc(mediaURL(path))}"></audio><button class="quiet icon-button" data-action="close-player" aria-label="Close player">${icon('close')}</button></section>`;
  const player=document.querySelector('#audio-player');player.addEventListener('error',()=>toast('Your browser cannot play this audio format.',true));player.play().catch(()=>{});
 }
-document.addEventListener('input',event=>{if(event.target.id==='manual-album-name'){state.manualAlbumName=event.target.value;updateManualDestination();}if(event.target.id==='file-filter'){state.filter=event.target.value;renderFileList();}});
+document.addEventListener('input',event=>{if(event.target.id==='manual-album-name'){state.manualAlbumName=event.target.value;updateManualDestination();}if(event.target.id==='file-filter'){state.filter=event.target.value;scheduleLibrarySearch();}});
 document.addEventListener('dblclick',event=>{const row=event.target.closest('[data-select]');if(!row)return;const entry=state.entries.find(e=>e.path===row.dataset.select);if(entry?.directory)openFolder(entry.path).catch(error=>toast(error.message,true));else if(entry?.audio)playFile(entry.path);});
 document.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('tr[data-select]')){selectFile(event.target.dataset.select);}});
 function manualImportDialog(path,destination=''){
@@ -615,6 +673,9 @@ document.addEventListener('click',async event=>{
   else if(action==='match-all'){button.disabled=true;const result=await api('/musicbrainz/match-all',{method:'POST',body:{path:state.path}});toast(`${result.queued} albums queued. ${result.skipped_imported} imported · ${result.skipped_matched} already matched · ${result.active} already queued.`);if(result.queued||result.active)await navigate('jobs');else await loadFiles();}
   else if(action==='close-modal')modal.close();
   else if(action==='reload')await navigate(state.page,true);
+  else if(action==='more-library-results')await runLibrarySearch(true);
+  else if(action==='retry-library-search')await runLibrarySearch();
+  else if(action==='open-containing-folder'&&state.selected)await openFolder(parentPath(state.selected.path));
   else if(action==='view-grid'||action==='view-list'){state.view=action==='view-grid'?'grid':'list';renderFileList();}
   else if(action==='dismiss-notice')button.closest('.download-notice')?.remove();
   else if(action==='clear-downloads'){button.disabled=true;await api('/soulseek/downloads/completed',{method:'DELETE'});await loadTransfers(true);toast('Finished downloads cleared. Files remain in Inbox.');}
@@ -648,7 +709,7 @@ document.addEventListener('submit',async event=>{
    if(!value)throw new Error('Enter a name');
    if(mode!=='move'&&(value.includes('/')||value.includes('\\')||value==='.'||value==='..'))throw new Error('A name cannot contain path separators');
    if(mode==='new-folder')await api('/folders',{method:'POST',body:{root:root(),path:join(state.path,value)}});
-   else await api('/move',{method:'POST',body:{root:root(),source:state.selected.path,destination:mode==='rename'?join(state.path,value):value}});
+   else await api('/move',{method:'POST',body:{root:root(),source:state.selected.path,destination:mode==='rename'?join(parentPath(state.selected.path),value):value}});
    modal.close();state.selected=null;await loadFiles();toast('Done.');
   }
   else if(form.id==='soulseek-form'){
