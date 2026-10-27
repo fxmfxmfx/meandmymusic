@@ -12,7 +12,7 @@ const folder = (name) => ({name, path:name, directory:true, modified:1700000000,
 const file = (name) => ({name, path:name, directory:false, audio:true, modified:1700000000, size:12345});
 const tick = () => new Promise(resolve => setTimeout(resolve, 20));
 
-async function fixture(authenticated=true, authFailure=null, matchOverrides={}) {
+async function fixture(authenticated=true, authFailure=null, matchOverrides={}, scenario={}) {
   const calls = [], errors = [];
   const console = new VirtualConsole();
   console.on('jsdomError', error => errors.push(error.message));
@@ -23,6 +23,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}) 
   const plan = {id:planId, kind:'preview', status:'ready', created:1700000000, result:{
     artist:'Test Artist', album:'Test Album', confidence:98, rows:[{source:'Album/01.wav', destination:'Test Artist/2026 - Test Album/1-01 Track.wav',
       before:{title:'Old title', artist:'Unknown'}, after:{title:'Correct title', artist:'Test Artist',album:'Test Album',year:2026,disc:1,track:1,tracktotal:1}}]}};
+  let transfers=scenario.transfers||[], jobs=[plan], events=scenario.events||[];
   let entries = [folder('Artist <script>'), folder('Second Artist'), file('Song.wav')];
   let account = {managed:true,api_reachable:true,logged_in:false,saved:false,busy:false,error:null};
   window.fetch = async (url, options={}) => {
@@ -43,21 +44,23 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}) 
     else if(path.pathname==='/api/folders') {entries.push(folder(body.path));result={ok:true};}
     else if(path.pathname==='/api/move') {entries=entries.map(entry=>entry.path===body.source?{...entry,path:body.destination,name:body.destination}:entry);result={ok:true};}
     else if(path.pathname==='/api/soulseek/searches'&&method==='POST') result={id:search};
-    else if(path.pathname===`/api/soulseek/searches/${search}`) result={search:{id:search,isComplete:true},responses:[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
-    else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:[];
-    else if(path.pathname==='/api/jobs') result=[plan];
+    else if(path.pathname===`/api/soulseek/searches/${search}`) result={search:{id:search,isComplete:true},responses:scenario.responses||[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
+    else if(path.pathname==='/api/soulseek/downloads/completed'){if(scenario.clearFailure){status=502;result={detail:'slskd unavailable'};}else{transfers=transfers.map(u=>({...u,directories:u.directories.map(d=>({...d,files:d.files.filter(f=>!String(f.state).includes('Completed'))}))}));result={ok:true};}}
+    else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:transfers;
+    else if(path.pathname==='/api/jobs'){if(method==='DELETE'){const finished=jobs.filter(j=>!['queued','running','ready','applying'].includes(j.status));jobs=jobs.filter(j=>!finished.includes(j));result={cleared:finished.length};}else result=jobs;}
+    else if(path.pathname===`/api/jobs/${planId}/cancel`){if(scenario.cancelFailure){status=409;result={detail:'Task already applying'};}else{plan.status='cancelled';plan.result=null;result={ok:true};}}
     else if(path.pathname==='/api/musicbrainz/match') result={artist:body.artist??'Tagged Artist',album:body.album??'Tagged Album',tracks:2,has_tags:true,candidates:[{id:release,artist:'Tagged Artist',title:'Tagged Album',tracks:2,confidence:98,extra_files:0,missing_tracks:0}],...matchOverrides};
     else if(path.pathname==='/api/imports/preview') result={id:planId};
     else if(path.pathname===`/api/jobs/${planId}`) result=plan;
     else if(path.pathname===`/api/imports/${planId}/apply`) result={id:'import-job'};
     else if(path.pathname==='/api/jobs/import-job') result={status:'done',result:{files:1}};
-    else if(path.pathname==='/api/history') result=[];
+    else if(path.pathname==='/api/history') result=events;
     else if(path.pathname==='/api/logout') authenticated=false;
     else {status=404;result={detail:'Unmocked route: '+path.pathname};}
     return {ok:status<400,status,json:async()=>result};
   };
   window.eval(fs.readFileSync('app/static/theme.js','utf8'));
-  window.eval(code);
+  window.eval(code+'\nwindow.testPollTransfers=loadTransfers;window.testPollSearch=pollSearch;');
   await tick();
   const click = selector => {
     const target=window.document.querySelector(selector);
@@ -66,7 +69,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}) 
     return target;
   };
   const submit = selector => window.document.querySelector(selector).dispatchEvent(new window.Event('submit',{bubbles:true,cancelable:true}));
-  return {dom,window,calls,errors,click,submit,close(){dom.window.close();}};
+  return {dom,window,calls,errors,click,submit,setTransfers(value){transfers=value;},setJobs(value){jobs=value;},async poll(){await window.testPollTransfers(true);await tick();},close(){dom.window.close();}};
 }
 
 test('login opens the archive, escaped filenames render as text, filter works', async () => {
@@ -106,8 +109,8 @@ test('Soulseek results group into folders and download sends exact filenames and
   try {
     f.click('[data-nav="soulseek"]');await tick();
     f.window.document.querySelector('#soulseek-query').value='Test Artist Album';f.submit('#soulseek-form');await tick();
-    assert.equal(f.window.document.querySelectorAll('.search-group').length,1);
-    f.click('[data-download-group="0"]');await tick();
+    assert.equal(f.window.document.querySelectorAll('[data-tree-scope="search"] > details').length,1);
+    const branch=[...f.window.document.querySelectorAll('[data-download-tree]')].find(b=>b.getAttribute('aria-label')==='Download folder Album');branch.click();await tick();
     const call=f.calls.find(c=>c.path==='/api/soulseek/downloads'&&c.method==='POST');
     assert.deepEqual(call.body,{username:'Peer',files:[{filename:'Music\\Album\\01.flac',size:123456}]});
     assert.match(f.window.document.querySelector('#toast').textContent,/files queued/);
@@ -204,6 +207,9 @@ test('graphical move picker navigates folders without typing a path', async () =
 test('all five themes persist across initialization and contain no promotional panels', async () => {
   const f=await fixture();
   try{
+    assert.ok(!f.window.document.querySelector('.topbar,header'));
+    assert.ok(!f.window.document.querySelector('[data-theme-picker],[data-action="logout"]'));
+    f.click('[data-nav="settings"]');await tick();
     const select=f.window.document.querySelector('[data-theme-picker]');
     assert.equal(select.options.length,5);
     for(const id of ['current','light','dark','gruvbox','mocha']){
@@ -269,4 +275,103 @@ test('hover navigation retains the drag source and drop uses the original file p
     assert.ok(!f.window.document.body.classList.contains('is-dragging'));
     assert.deepEqual(f.errors,[]);
   }finally{f.close();}
+});
+
+const transferFile=(id,name,state='InProgress',extra={})=>({id,filename:`Music\\Album\\${name}`,size:100,bytesTransferred:50,state,requestedAt:'2026-10-27T10:00:00Z',...extra});
+const transferData=files=>[{username:'Peer',directories:[{directory:'Music\\Album',files}]}];
+
+test('search tree keeps peers separate and downloads a parent branch with nested discs',async()=>{
+ const files=[{filename:'Music\\Artist <b>\\Album\\CD1\\01.flac',size:10},{filename:'Music\\Artist <b>\\Album\\CD2\\02.flac',size:20}];
+ const f=await fixture(true,null,{}, {responses:[{username:'Peer "A"',files,hasFreeUploadSlot:true},{username:'Peer B',files:[files[0]]}]});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();
+  assert.ok(f.window.document.querySelector('.page-heading #slskd-status'));
+  f.window.document.querySelector('#soulseek-query').value='Artist Album';f.submit('#soulseek-form');await tick();
+  assert.equal(f.window.document.querySelectorAll('[data-tree-scope="search"] > details').length,2);
+  assert.equal(f.window.document.querySelectorAll('.tree-file').length,3);
+  assert.ok(!f.window.document.querySelector('#search-results b'));
+  const albumButton=[...f.window.document.querySelectorAll('[data-download-tree]')].find(b=>b.getAttribute('aria-label')==='Download folder Album');
+  const albumBranch=albumButton.closest('details');albumBranch.open=true;const key=albumBranch.dataset.treeKey;
+  albumButton.click();await tick();
+  const call=f.calls.find(c=>c.path==='/api/soulseek/downloads'&&c.method==='POST');
+  assert.deepEqual(call.body,{username:'Peer "A"',files});assert.equal(albumBranch.open,true);
+  await f.window.testPollSearch();
+  assert.equal([...f.window.document.querySelectorAll('details')].find(el=>el.dataset.treeKey===key).open,true);
+  f.click('[data-nav="library"]');await tick();assert.ok(!f.window.document.querySelector('#slskd-status'));
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('download tree preserves expanded branches, sorts files and filters without lying about folder completion',async()=>{
+ const f=await fixture(true,null,{}, {transfers:transferData([transferFile('a','Z.flac'),transferFile('b','A.flac','Completed, Succeeded',{bytesTransferred:100,size:200})])});
+ try{
+  f.click('[data-nav="transfers"]');await tick();
+  const branch=[...f.window.document.querySelectorAll('details')].find(el=>el.querySelector('summary > .tree-label').textContent==='Album');branch.open=true;const key=branch.dataset.treeKey;
+  const sort=f.window.document.querySelector('#transfer-sort');sort.value='name';sort.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+  assert.match(f.window.document.querySelector('.transfer-file .tree-label').textContent,/A.flac/);
+  await f.poll();assert.equal([...f.window.document.querySelectorAll('details')].find(el=>el.dataset.treeKey===key).open,true);
+  const filter=f.window.document.querySelector('#transfer-filter');filter.value='complete';filter.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+  assert.equal(f.window.document.querySelectorAll('.transfer-file').length,1);
+  assert.match(f.window.document.querySelector('.tree-meta').textContent,/1\/2 downloaded/);
+  assert.ok(f.window.document.querySelector('summary progress').value<100);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('completion notices work off the Downloads page and do not repeat or report failed transfers as successful',async()=>{
+ const initial=[transferFile('a','A.flac'),transferFile('b','B.flac'),transferFile('c','Failure.flac','Completed, Errored',{filename:'Other\\Failure.flac'})];
+ const f=await fixture(true,null,{}, {transfers:transferData(initial)});
+ try{
+  assert.equal(f.window.document.querySelectorAll('.download-notice').length,0);
+  f.setTransfers(transferData([{...initial[0],state:'Completed, Succeeded',bytesTransferred:100},initial[1],initial[2]]));await f.poll();
+  assert.match(f.window.document.querySelector('.download-notice').textContent,/File downloaded: A.flac/);
+  await f.poll();assert.equal(f.window.document.querySelectorAll('.download-notice').length,1);
+  f.setTransfers(transferData([{...initial[0],state:'Completed, Succeeded',bytesTransferred:100},{...initial[1],state:'Completed, Succeeded',bytesTransferred:100},initial[2]]));await f.poll();
+  assert.equal(f.window.document.querySelectorAll('.download-notice').length,2);
+  assert.match(f.window.document.querySelector('#download-notices').textContent,/Folder downloaded: Album · 2 files/);
+  assert.ok(!f.window.document.querySelector('#download-notices').textContent.includes('Failure'));
+  assert.match(f.window.document.querySelector('h1').textContent,/Library/);
+  f.click('[data-action="dismiss-notice"]');assert.equal(f.window.document.querySelectorAll('.download-notice').length,1);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('clear finished downloads keeps active records and failed cleanup leaves the tree intact',async()=>{
+ for(const fail of [false,true]){
+  const f=await fixture(true,null,{}, {clearFailure:fail,transfers:transferData([transferFile('a','Active.flac'),transferFile('b','Done.flac','Completed, Succeeded')])});
+  try{
+   f.click('[data-nav="transfers"]');await tick();f.click('[data-action="clear-downloads"]');await tick();await tick();
+   assert.ok(f.calls.some(c=>c.path==='/api/soulseek/downloads/completed'&&c.method==='DELETE'));
+   assert.equal(f.window.document.querySelectorAll('.transfer-file').length,fail?2:1);
+   if(fail)assert.match(f.window.document.querySelector('#toast').textContent,/slskd unavailable/);
+   else assert.match(f.window.document.querySelector('#toast').textContent,/Files remain in Inbox/);
+   assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+ }
+});
+
+test('review can be rejected from its modal and cleared without applying; rejection errors leave it reviewable',async()=>{
+ for(const fail of [false,true]){
+  const f=await fixture(true,null,{}, {cancelFailure:fail});
+  try{
+   f.click('[data-nav="jobs"]');await tick();f.click(`[data-show-plan="${planId}"]`);await tick();f.click(`[data-cancel-job="${planId}"]`);await tick();
+   assert.equal(f.window.document.querySelector('#modal').open,fail);
+   assert.ok(!f.calls.some(c=>c.path.endsWith('/apply')));
+   if(!fail){assert.match(f.window.document.querySelector('.job-card').textContent,/Cancelled/);f.click('[data-action="clear-jobs"]');await tick();assert.equal(f.window.document.querySelectorAll('.job-card').length,0);}
+   else assert.match(f.window.document.querySelector('#toast').textContent,/already applying/);
+   assert.deepEqual(f.errors,[]);
+  }finally{f.close();}
+ }
+});
+
+test('history uses a dated timeline with a filter, escaped paths and undo only for supported actions',async()=>{
+ const f=await fixture(true,null,{}, {events:[{id:'move-id',created:1700000000,kind:'move',undone:false,data:{root:'inbox',source:'<script>',destination:'Album/New'}},{id:'delete-id',created:1700000000,kind:'delete',undone:false,data:{root:'library',path:'Old Album'}},{id:'mkdir-id',created:1699800000,kind:'mkdir',undone:true,data:{root:'inbox',path:'Folder'}}]});
+ try{
+  f.click('[data-nav="history"]');await tick();assert.equal(f.window.document.querySelectorAll('.history-day').length,2);assert.equal(f.window.document.querySelectorAll('.history-event').length,3);
+  assert.equal(f.window.document.querySelectorAll('[data-undo]').length,1);assert.ok(!f.window.document.querySelector('#history-timeline script'));
+  assert.match(f.window.document.querySelector('.history-detail').textContent,/<script>/);
+  const filter=f.window.document.querySelector('#history-filter');filter.value='delete';filter.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+  assert.equal(f.window.document.querySelectorAll('.history-event').length,1);assert.match(f.window.document.querySelector('.history-detail').textContent,/Old Album/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
 });

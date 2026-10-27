@@ -105,7 +105,7 @@ def create_app(settings=None):
                 await restore_task
             worker.shutdown(wait=True)
 
-    app = FastAPI(title="meandmymusic", version="0.4.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="meandmymusic", version="0.5.0", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings, app.state.store, app.state.soulseek = settings, store, soulseek
     app.state.account = account
 
@@ -153,10 +153,11 @@ def create_app(settings=None):
     def run_job(kind, function, *args, plan_id=None):
         job_id = store.new_job(kind)
         def execute():
-            store.update_job(job_id, "running")
+            if not store.start_job(job_id):
+                return
             try:
                 result = function(settings, *args)
-                store.update_job(job_id, "ready" if kind == "preview" else "done", result=result)
+                store.finish_job(job_id, "ready" if kind == "preview" else "done", result=result)
                 if kind == "import":
                     store.update_job(plan_id, "applied")
                     store.event("import", result)
@@ -166,7 +167,7 @@ def create_app(settings=None):
                 for value in (settings.password, settings.slskd_key):
                     if value:
                         message = message.replace(value, "[redacted]")
-                store.update_job(job_id, "failed", error=message[:2000])
+                store.finish_job(job_id, "failed", error=message[:2000])
                 if plan_id:
                     store.update_job(plan_id, "failed", error="Import failed. Create a new preview.")
         worker.submit(execute)
@@ -174,7 +175,7 @@ def create_app(settings=None):
 
     @app.get("/api/health")
     def health():
-        return {"status": "ok", "version": "0.4.0"}
+        return {"status": "ok", "version": "0.5.0"}
 
     @app.post("/api/login")
     def login(data: Login, request: Request, response: Response):
@@ -211,7 +212,7 @@ def create_app(settings=None):
                 slskd_ok = True
             except HTTPException:
                 pass
-        return {"version": "0.4.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
+        return {"version": "0.5.0", "slskd": slskd_ok, "slskd_configured": bool(settings.slskd_key),
                 "beets": True, "navidrome_url": settings.navidrome_url if settings.navidrome_url.startswith(("https://", "http://")) else "",
                 "path_format": "$albumartist/$year - $album/$disc-$track $title", "import_mode": "copy"}
 
@@ -367,6 +368,12 @@ def create_app(settings=None):
     async def downloads():
         return await soulseek.request("GET", "/transfers/downloads")
 
+    @app.delete("/api/soulseek/downloads/completed")
+    async def clear_downloads():
+        # slskd removes terminal transfer records; downloaded files stay on disk.
+        await soulseek.request("DELETE", "/transfers/downloads/all/completed")
+        return {"ok": True}
+
     @app.delete("/api/soulseek/downloads/{username}/{transfer_id}")
     async def cancel_download(username: str, transfer_id: UUID):
         return await soulseek.request("DELETE", f"/transfers/downloads/{segment(username)}/{transfer_id}?remove=false")
@@ -405,6 +412,18 @@ def create_app(settings=None):
     @app.get("/api/jobs")
     def jobs():
         return store.jobs()
+
+    @app.delete("/api/jobs")
+    def clear_jobs():
+        return {"cleared": store.clear_jobs()}
+
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: UUID):
+        if not store.get_job(str(job_id)):
+            raise HTTPException(404, "Task not found")
+        if not store.cancel_job(str(job_id)):
+            raise HTTPException(409, "This task can no longer be cancelled. An import already writing files must finish.")
+        return {"ok": True}
 
     @app.get("/api/jobs/{job_id}")
     def job(job_id: UUID):

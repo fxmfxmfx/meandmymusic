@@ -19,10 +19,13 @@ filesystem access or SSH to the music server. Configure `MMM_URL` and
 | `results SEARCH_UUID` | Read search status/results |
 | `download --user USER --files FILE.json` | Queue explicitly selected files |
 | `downloads` | Download queue |
+| `clear-downloads` | Clear finished download records; keep files |
 | `releases QUERY` | Text search for MusicBrainz editions |
 | `preview INBOX_PATH --release RELEASE_UUID [--wait]` | Match an exact edition and preview changes |
 | `apply PLAN_UUID [--wait]` | Apply a reviewed plan by copying and tagging |
 | `jobs` / `job JOB_UUID [--wait]` | Background task status |
+| `cancel-job JOB_UUID` | Cancel/reject a preview; no import occurs |
+| `clear-jobs` | Hide finished tasks; keep active tasks and ready previews |
 | `history` / `undo EVENT_UUID` | History; undo moves and creation of empty folders |
 
 Place `--url` or `--password-env NAME` before the subcommand to override defaults.
@@ -78,3 +81,15 @@ permanently deletes a file or an entire folder, including its contents. The UI
 requires confirmation. Agents must have explicit authorization for deletion and
 must not infer that permission from authorization to import. Deletion cannot be
 undone through History.
+
+`POST /api/jobs/ID/cancel` atomically cancels a queued, running or ready preview.
+It conflicts with applying that preview; once either succeeds, the other returns
+409. Running preview results are discarded after cancellation. Imports already
+writing files cannot be cancelled. Expired previews report `expired`.
+
+`DELETE /api/jobs` hides terminal tasks, returning `{"cleared": N}`. Active tasks
+and previews awaiting review remain visible. Cleared IDs stay readable for
+polling clients; cleanup does not change operation history or files.
+
+`DELETE /api/soulseek/downloads/completed` clears terminal slskd transfer records
+without removing downloaded files. Active transfers remain in the queue.

@@ -11,11 +11,21 @@ another music server.
 - Drag items onto folders or breadcrumbs. Hold over a destination for 650 ms to
   open it without releasing the drag; continue browsing, then drop in the desired
   folder. The Move button provides a graphical folder picker as an alternative.
-- Review operation history; undo moves, renames and creation of empty folders.
+- Browse a history timeline grouped by day and filter operations; undo moves,
+  renames and creation of empty folders.
   Deletion is permanent and requires confirmation.
 - Choose Original, Light, Dark, Gruvbox or Catppuccin Mocha. Theme selection is
-  remembered in the browser and applies to the login screen too.
-- Search Soulseek, queue remote files and monitor downloads on the server.
+  available in Settings, remembered in the browser and applied to the login screen too.
+  Manager sign-out is also in Settings; Soulseek connection status is in its tab.
+- Browse Soulseek search results and downloads as user/folder/file trees. Download
+  a file or an entire branch, including nested disc folders.
+- Sort downloads by time, name, status, progress or size; filter active, successful
+  or failed transfers. Clear finished records without deleting downloaded files.
+- Receive in-app notices when a file or selected folder finishes downloading,
+  including while viewing another page. Browser notifications can be enabled in
+  Settings where supported (usually HTTPS or localhost); keep the app open.
+- Cancel a queued/running preview or reject one awaiting review. Clear finished
+  tasks while keeping active work and previews awaiting a decision.
 - Register or sign in to Soulseek and verify actual network login.
 - Match Inbox albums using embedded metadata, track names, durations and track
   counts through beets. Review ranked editions, missing/extra tracks and proposed
@@ -163,6 +173,18 @@ Album Artist/Year - Album/Disc-Track Title.ext
 ```
 
 Navidrome sees imports on its next scan. Automatic scan triggering is not included.
+
+## Tasks and cleanup
+
+**Downloads → Clear finished** removes succeeded, failed and cancelled transfer
+records from slskd. Files in Inbox and active transfers stay in place.
+
+**Tasks → Reject** discards a preview awaiting approval. **Cancel** discards queued
+or running preview work; a network request already underway may finish, but its
+result cannot become importable. An import already copying/tagging files must
+finish. **Clear finished** hides completed, applied, failed, cancelled, expired
+and interrupted tasks. It keeps ready previews and active tasks; operation history
+is retained. Cleared task IDs remain readable by polling clients.
 
 ## CLI and API
 

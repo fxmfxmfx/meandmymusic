@@ -47,7 +47,7 @@ before(async()=>{
  await fs.mkdir('artifacts',{recursive:true});
 });
 
-beforeEach(async()=>{if(page){await page.keyboard.press('Escape');await page.mouse.up();}});
+beforeEach(async()=>{if(page){await page.keyboard.press('Escape');await page.mouse.up();if(await page.locator('#login-form').count()){await page.locator('#password').fill(password);await page.locator('#login-form button').click();await page.locator('.shell').waitFor();}}});
 afterEach(async(context)=>{if(page){await page.screenshot({path:`artifacts/check-${context.name.split(' ')[0]}.png`,fullPage:true,animations:'disabled'});if(context.name.startsWith('native'))console.log('Native drag events:',JSON.stringify(await page.evaluate(()=>window.dragEvents)));await page.keyboard.press('Escape');}});
 
 after(async()=>{
@@ -56,7 +56,7 @@ after(async()=>{
  if(directory)await fs.rm(directory,{recursive:true,force:true});
 });
 
-async function hover(locator){const box=await locator.boundingBox();assert.ok(box);await page.mouse.move(box.x+box.width/2,box.y+box.height/2,{steps:12});}
+async function hover(locator){const box=await locator.boundingBox();assert.ok(box);await page.mouse.move(box.x+box.width/2,box.y+box.height/2,{steps:12});await page.mouse.move(box.x+box.width/2+1,box.y+box.height/2+1);}
 async function exists(relative){try{await fs.access(path.join(directory,relative));return true;}catch{return false;}}
 async function waitForFile(relative){for(let i=0;i<60;i++){if(await exists(relative))return;await pause(100);}assert.fail('Expected file: '+relative);}
 
@@ -120,9 +120,11 @@ test('permanent deletion confirms the target and deletes nested Inbox contents',
 });
 
 test('themes cover desktop, mobile and login without overflow or browser errors',async()=>{
- await page.locator('[data-nav="library"]').click();
+ await page.locator('[data-nav="settings"]').click();
  for(const theme of ['current','light','dark','gruvbox','mocha']){
   await page.locator('[data-theme-picker]').selectOption(theme);
+  await page.locator('[data-nav="library"]').click();
+  await page.locator('.folder-card').first().waitFor();
   await page.screenshot({path:`artifacts/theme-${theme}.png`,fullPage:true,animations:'disabled'});
   const contrast=await page.evaluate(()=>{
    function luminance(value){const rgb=value.match(/[\d.]+/g).slice(0,3).map(Number).map(v=>v/255).map(v=>v<=.04045?v/12.92:((v+.055)/1.055)**2.4);return rgb[0]*.2126+rgb[1]*.7152+rgb[2]*.0722;}
@@ -131,8 +133,9 @@ test('themes cover desktop, mobile and login without overflow or browser errors'
   for(const item of contrast)assert.ok(item.ratio>=4.5,`${theme} ${item.selector} contrast: ${item.ratio}`);
   assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),theme);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+  await page.locator('[data-nav="settings"]').click();
  }
- await page.reload();await page.locator('[data-select="Drag Test"]').waitFor();
+ await page.reload();await page.locator('[data-select="Drag Test"]').waitFor();await page.locator('[data-nav="settings"]').click();
  assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
  await page.setViewportSize({width:390,height:844});
  await page.screenshot({path:'artifacts/mobile.png',fullPage:true,animations:'disabled'});
@@ -140,5 +143,67 @@ test('themes cover desktop, mobile and login without overflow or browser errors'
  await page.locator('[data-action="logout"]').click();await page.locator('#login-form').waitFor();
  await page.screenshot({path:'artifacts/login.png',fullPage:true,animations:'disabled'});
  assert.equal(await page.locator('[data-theme-picker]').inputValue(),'mocha');
+ assert.deepEqual(errors,[]);
+});
+
+test('tree search and downloads support native expansion, branch downloads, completion notices and cleanup',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ const requested=[];
+ const remoteFiles=[{filename:'Music\\Test Artist\\Double Album\\CD1\\01 One.flac',size:100},{filename:'Music\\Test Artist\\Double Album\\CD2\\01 Two.flac',size:200}];
+ let transfers=[{username:'Fixture Peer',directories:[{directory:'Music',files:remoteFiles.map((file,index)=>({...file,id:`fixture-${index}`,state:'InProgress',bytesTransferred:20,requestedAt:`2026-10-27T10:0${index}:00Z`}))}]}];
+ await page.route('**/api/system',route=>route.fulfill({json:{slskd:true,slskd_configured:true}}));
+ await page.route('**/api/soulseek/searches',route=>route.fulfill({json:{id:'f3782ee1-5cd2-45d8-936e-57fd18216b21'}}));
+ await page.route('**/api/soulseek/searches/*',route=>route.fulfill({json:{search:{isComplete:true},responses:[{username:'Fixture Peer',hasFreeUploadSlot:true,files:remoteFiles}]}}));
+ await page.route('**/api/soulseek/downloads',async route=>{
+  if(route.request().method()==='POST'){requested.push(route.request().postDataJSON());await route.fulfill({json:{ok:true}});}
+  else await route.fulfill({json:transfers});
+ });
+ await page.route('**/api/soulseek/downloads/completed',route=>{transfers=transfers.map(user=>({...user,directories:user.directories.map(dir=>({...dir,files:dir.files.filter(f=>!f.state.includes('Completed'))}))}));return route.fulfill({json:{ok:true}});});
+ try{
+  await page.reload();await page.locator('[data-nav="soulseek"]').click();
+  assert.equal(await page.locator('.topbar').count(),0);assert.equal(await page.locator('.page-heading #slskd-status').count(),1);
+  await page.locator('#soulseek-query').fill('Test Artist Double Album');await page.locator('#soulseek-form button[type="submit"]').click();
+  await page.locator('[data-tree-scope="search"]').waitFor();
+  // Exercise the native summary toggle instead of setting details.open in the test.
+  await page.locator('summary').filter({has:page.locator(':scope > .tree-label',{hasText:'Test Artist'})}).click();
+  const album=page.locator('details').filter({has:page.locator(':scope > summary > .tree-label',{hasText:'Double Album'})});
+  await album.locator(':scope > summary').click();
+  await album.locator(':scope > summary [data-download-tree]').click();
+  assert.deepEqual(requested,[{username:'Fixture Peer',files:remoteFiles}]);
+  assert.equal(await album.getAttribute('open'),'');
+  await page.locator('[data-nav="transfers"]').click();
+  await page.locator('#transfer-sort').selectOption('name');
+  await page.locator('#transfer-tree details').evaluateAll(nodes=>nodes.forEach(node=>node.open=true));
+  await page.screenshot({path:'artifacts/download-tree-desktop.png',fullPage:true,animations:'disabled'});
+  await page.evaluate(()=>loadTransfers(true));assert.equal(await page.locator('#transfer-tree details:not([open])').count(),0);
+  await page.locator('[data-nav="library"]').click();
+  transfers[0].directories[0].files[0]={...transfers[0].directories[0].files[0],state:'Completed, Succeeded',bytesTransferred:100};
+  await page.evaluate(()=>loadTransfers(true));await page.locator('.download-notice').waitFor();
+  await page.evaluate(()=>loadTransfers(true));assert.equal(await page.locator('.download-notice').count(),1);
+  await page.locator('[data-nav="transfers"]').click();await page.locator('[data-action="clear-downloads"]').click();
+  await page.waitForFunction(()=>document.querySelectorAll('.transfer-file').length===1);
+  assert.match(await page.locator('.transfer-file').textContent(),/Two.flac/);
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'artifacts/download-tree-mobile.png',fullPage:true,animations:'disabled'});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ }finally{
+  await page.unroute('**/api/system');await page.unroute('**/api/soulseek/searches');await page.unroute('**/api/soulseek/searches/*');await page.unroute('**/api/soulseek/downloads');await page.unroute('**/api/soulseek/downloads/completed');
+ }
+ assert.deepEqual(errors,[]);
+});
+
+test('task rejection and cleanup use real task state and history renders a filtered timeline',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ // Seed only the disposable test application's database, never an archive.
+ await new Promise((resolve,reject)=>{
+  const child=spawn(process.env.MMM_TEST_PYTHON||'python',['-c',`from pathlib import Path; import time; from app.store import Store; s=Store(Path(${JSON.stringify(path.join(directory,'state'))})); j=s.new_job('preview'); s.update_job(j,'ready',{'artist':'Fixture Artist','album':'Fixture Album','confidence':98,'rows':[],'created':time.time()})`],{stdio:['ignore','ignore','pipe']});
+  let log='';child.stderr.on('data',data=>log+=data);child.on('exit',code=>code?reject(new Error(log)):resolve());
+ });
+ await page.locator('[data-nav="jobs"]').click();await page.locator('[data-show-plan]').click();await page.locator('#modal [data-cancel-job]').click();
+ await page.locator('#modal').waitFor({state:'hidden'});assert.match(await page.locator('.job-card').textContent(),/Cancelled/);
+ await page.locator('[data-action="clear-jobs"]').click();await page.locator('.jobs-list').waitFor({state:'detached'});
+ await page.locator('[data-nav="history"]').click();await page.locator('.history-timeline').first().waitFor();
+ await page.locator('#history-filter').selectOption('delete');assert.match(await page.locator('.history-event').first().textContent(),/Deleted/);
+ await page.screenshot({path:'artifacts/history-timeline.png',fullPage:true,animations:'disabled'});
  assert.deepEqual(errors,[]);
 });

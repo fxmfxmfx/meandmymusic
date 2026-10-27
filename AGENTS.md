@@ -80,6 +80,23 @@ such as Navidrome. Finish the requested behavior across the API and UI.
   Internal manager-to-slskd requests must bypass outbound/environment proxies.
 - Preserve the pinned slskd version unless compatibility is deliberately verified.
 
+## Download and task interface contracts
+
+- Keep search and transfer trees keyed by username and full remote path. Preserve
+  original remote filenames for requests, nested disc folders and expansion state.
+- Poll downloads while the signed-in app is open, including outside Downloads.
+  Notify on successful transitions only; failed/cancelled terminal transfers are
+  not successes. Do not announce old completed downloads on initial page load.
+- Download cleanup removes terminal slskd records, never Inbox files or active
+  transfers. Keep task cleanup separate from operation history and music files.
+- Preview rejection and apply must use mutually exclusive database transitions.
+  A cancelled worker must not later restore its result or run queued work.
+- Keep active tasks and ready previews during cleanup. Retain cleared terminal
+  records for clients already polling an ID. Do not force-stop an import while it
+  is publishing files. Keep ready-preview expiry visible to the user.
+- The app shell has no top header. Theme/session controls belong in Settings;
+  Soulseek connection status belongs in the Soulseek page heading.
+
 ## Matching and import contracts
 
 - Prefer embedded album/artist/release tags and track-level matching through

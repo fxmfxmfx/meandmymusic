@@ -1,7 +1,7 @@
 'use strict';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0};
+const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all'};
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -47,13 +47,13 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
- clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);if(modal.open)modal.close();
+ clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
  app.innerHTML=`<main class="login-screen"><div class="login-theme">${themePicker()}</div><form class="login-form" id="login-form">${brand()}<h1>Open your library</h1><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button class="primary" type="submit">Sign in ${icon('arrow')}</button><p class="login-error" id="login-error" role="alert"></p></form></main>`;
 }
 function shell(){
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.4</span></div></aside><main class="main"><header class="topbar"><strong id="context-title">Library</strong><div class="status-group"><span class="status-pill" id="slskd-status"></span>${themePicker()}<button class="quiet icon-button" data-action="logout" title="Sign out" aria-label="Sign out">${icon('logout')}</button></div></header><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.5</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
- api('/system').then(system=>{state.system=system;updateStatus();if(state.page==='settings')renderSettings();}).catch(error=>toast(error.message,true));
+ api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
  refreshAccount().catch(()=>{});clearInterval(state.accountTimer);state.accountTimer=setInterval(()=>refreshAccount(false).catch(()=>{}),10000);
 }
 function updateStatus(){const el=document.querySelector('#slskd-status');if(el)el.innerHTML=`<i class="dot${state.account?.logged_in?'':' off'}"></i> ${state.account?.logged_in?'Soulseek connected':state.system?.slskd?'Soulseek offline':'slskd unavailable'}`;}
@@ -64,18 +64,16 @@ async function refreshAccount(render=true){
 }
 function heading(number,title,subtitle,actions=''){const titles={'01':'Library','02':'Inbox','03':'Soulseek','04':'Downloads','05':'Tasks','06':'History','07':'Settings'};return `<section class="page-heading"><h1>${titles[number]||title}</h1>${actions?`<div class="heading-actions">${actions}</div>`:''}</section>`;}
 async function navigate(page){
- state.generation++;const generation=state.generation;
- clearInterval(state.transferTimer);clearInterval(state.jobTimer);
+ rememberTree('search');rememberTree('transfers');state.generation++;const generation=state.generation;
+ clearInterval(state.jobTimer);
  if(state.page!==page){state.path='';state.selected=null;state.filter='';}
  state.page=page;
  document.querySelectorAll('[data-nav]').forEach(button=>button.classList.toggle('active',button.dataset.nav===page));
- const titles={library:'Library',inbox:'Inbox',soulseek:'Soulseek',transfers:'Downloads',jobs:'Tasks',history:'History',settings:'Settings'};
- document.querySelector('#context-title').textContent=titles[page];
  const content=document.querySelector('#content');content.innerHTML='<div class="loading"><span class="spinner"></span>Loading…</div>';
  try{
   if(page==='library'||page==='inbox')await loadFiles();
   else if(page==='soulseek')renderSoulseek();
-  else if(page==='transfers'){await loadTransfers();state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}
+  else if(page==='transfers'){renderTransfers();await loadTransfers();}
   else if(page==='jobs'){await loadJobs();state.jobTimer=setInterval(()=>loadJobs().catch(()=>{}),2500);}
   else if(page==='history')await loadHistory();
   else if(page==='settings')renderSettings();
@@ -132,7 +130,7 @@ function renderInspector(){
 }
 function selectFile(path){state.selected=state.entries.find(e=>e.path===path);document.querySelectorAll('[data-select]').forEach(el=>el.classList.toggle('selected',el.dataset.select===path));renderInspector();renderFileActions();}
 async function openFolder(path){state.path=path;state.selected=null;state.filter='';await loadFiles();}
-function showModal(title,body,footer=''){modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${title}</h2><button class="quiet icon-button" data-action="close-modal" aria-label="Close">${icon('close')}</button></div><div class="modal-content">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;if(!modal.open)modal.showModal();}
+function showModal(title,body,footer=''){delete modal.dataset.jobId;modal.innerHTML=`<div class="modal-header"><h2 id="modal-title">${title}</h2><button class="quiet icon-button" data-action="close-modal" aria-label="Close">${icon('close')}</button></div><div class="modal-content">${body}</div>${footer?`<div class="modal-footer">${footer}</div>`:''}`;if(!modal.open)modal.showModal();}
 function fileDialog(mode){
  const entry=state.selected;
  if(mode!=='new-folder'&&!entry)return;
@@ -143,30 +141,141 @@ function fileDialog(mode){
  modal.querySelector('input').focus();modal.querySelector('input').select();
 }
 function renderSoulseek(){
- document.querySelector('#content').innerHTML=heading('03','Soulseek','Search Soulseek and download to Inbox.')+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><button class="primary" type="submit">${icon('search')}Search</button>${state.searchId&&!state.searchDone?'<button type="button" data-action="stop-search">Stop</button>':''}</form><p class="search-help">Results are grouped by user and folder.</p></section><div id="search-results"></div>`;
- renderSearchResults();
+ document.querySelector('#content').innerHTML=heading('03','Soulseek','',`<span class="status-pill" id="slskd-status"></span>`)+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><button class="primary" type="submit">${icon('search')}Search</button>${state.searchId&&!state.searchDone?'<button type="button" data-action="stop-search">Stop</button>':''}</form><p class="search-help">Browse users and folders. Download a branch or an individual file.</p></section><div id="search-results"></div>`;
+ updateStatus();renderSearchResults();
 }
 function normalizeResults(responses){
  const groups=new Map();
  for(const response of Array.isArray(responses)?responses:[]){for(const file of response.files||[]){if(!file.filename)continue;const split=file.filename.lastIndexOf('\\');const folder=split>=0?file.filename.slice(0,split):'';const key=JSON.stringify([response.username,folder]);if(!groups.has(key))groups.set(key,{username:response.username,folder,files:[],speed:response.uploadSpeed,queue:response.queueLength,slot:response.hasFreeUploadSlot});groups.get(key).files.push(file);}}
  return [...groups.values()].sort((a,b)=>Number(b.slot)-Number(a.slot)||(b.speed||0)-(a.speed||0));
 }
+// Remote paths are display keys only. Keep original filenames for slskd requests.
+function remoteParts(filename){return String(filename||'').split(/[\\/]/).filter(Boolean);}
+function remoteTree(files){
+ const users=new Map();
+ for(const file of files){
+  if(!file.filename)continue;
+  if(!users.has(file.username))users.set(file.username,{name:file.username,username:file.username,path:[],children:new Map(),direct:[],files:[],user:true});
+  let node=users.get(file.username);node.files.push(file);
+  const parts=remoteParts(file.filename);parts.pop();
+  for(const name of parts){if(!node.children.has(name))node.children.set(name,{name,username:file.username,path:[...node.path,name],children:new Map(),direct:[],files:[]});node=node.children.get(name);node.files.push(file);}
+  node.direct.push(file);
+ }
+ return [...users.values()];
+}
+function treeKey(scope,node){return JSON.stringify([scope,node.username,...node.path]);}
+function rememberTree(scope){document.querySelectorAll(`[data-tree-scope="${scope}"] details[data-tree-key]`).forEach(el=>state.treeOpen.set(el.dataset.treeKey,el.open));}
+function treeBranch(scope,node,depth,body,actions,meta){
+ const key=treeKey(scope,node),open=state.treeOpen.has(key)?state.treeOpen.get(key):depth<2;
+ return `<details class="tree-branch" data-tree-key="${esc(key)}" ${open?'open':''}><summary><span class="tree-chevron" aria-hidden="true">›</span>${icon(node.user?'download':'folder')}<span class="tree-label">${esc(node.name||'Files')}</span><span class="tree-meta">${meta}</span><span class="tree-actions">${actions}</span></summary><div class="tree-children">${body}</div></details>`;
+}
 function renderSearchResults(){
- const el=document.querySelector('#search-results');if(!el)return;
+ const el=document.querySelector('#search-results');if(!el)return;rememberTree('search');
  if(!state.searchId){el.innerHTML=`<div class="empty">${icon('search')}<h3>Search for music</h3><p>Enter an artist, album or track name.</p></div>`;return;}
- el.innerHTML=`<div class="search-summary">${!state.searchDone?'<span class="spinner"></span>Searching… ':''}${state.groups.length} folders found${state.searchDone?' · search complete':''}</div>`+state.groups.slice(0,100).map((group,index)=>`<article class="search-group"><div class="search-group-head"><div><h3>${esc(basename(group.folder)||'Individual files')}</h3><p>${esc(group.username)} · ${group.files.length} files · ${size(group.files.reduce((sum,f)=>sum+f.size,0))} · ${group.slot?'slot available':`queue: ${group.queue||0}`} ${group.speed?`· ${size(group.speed)}/s`:''}</p></div><button class="small primary" data-download-group="${index}">${icon('download')}Download folder</button></div><details><summary>Show files</summary>${group.files.map((file,fileIndex)=>`<div class="search-file"><span>${esc(basename(file.filename))} <span class="muted">· ${size(file.size)} ${file.bitRate?`· ${file.bitRate} kbps`:''}${file.bitDepth?` · ${file.bitDepth} bit / ${file.sampleRate||'?'} Hz`:''}</span></span><button class="quiet icon-button" data-download-file="${index}:${fileIndex}" aria-label="Download file">${icon('download')}</button></div>`).join('')}</details></article>`).join('')+(state.searchDone&&!state.groups.length?'<div class="empty"><h3>No results yet.</h3><p>Try another query or check your Soulseek connection.</p></div>':'');
+ state.searchNodes=new Map();let id=0;
+ const files=state.groups.flatMap((group,g)=>group.files.map((file,f)=>({...file,username:group.username,group:g,index:f})));
+ const render=(node,depth)=>{
+  const nodeId=String(id++);state.searchNodes.set(nodeId,node);
+  const body=[...node.children.values()].sort((a,b)=>a.name.localeCompare(b.name)).map(n=>render(n,depth+1)).join('')+node.direct.sort((a,b)=>a.filename.localeCompare(b.filename)).map(file=>`<div class="tree-file search-file">${icon('music')}<span class="tree-label">${esc(basename(file.filename))}<small>${size(file.size)}${file.bitRate?` · ${esc(file.bitRate)} kbps`:''}${file.bitDepth?` · ${esc(file.bitDepth)} bit / ${esc(file.sampleRate||'?')} Hz`:''}</small></span><button class="quiet icon-button" data-download-file="${file.group}:${file.index}" aria-label="Download ${esc(basename(file.filename))}">${icon('download')}</button></div>`).join('');
+  const peer=state.groups.find(g=>g.username===node.username);
+  const meta=`${node.files.length} files · ${size(node.files.reduce((sum,f)=>sum+(f.size||0),0))}${node.user?` · ${peer.slot?'slot available':`queue: ${esc(peer.queue||0)}`}${peer.speed?` · ${size(peer.speed)}/s`:''}`:''}`;
+  return treeBranch('search',node,depth,body,`<button class="small primary" data-download-tree="${nodeId}" aria-label="Download ${node.user?'all results from':'folder'} ${esc(node.name)}">${icon('download')}<span>${node.user?'Download all':'Download folder'}</span></button>`,meta);
+ };
+ el.innerHTML=`<div class="search-summary">${!state.searchDone?'<span class="spinner"></span>Searching… ':''}${files.length} files · ${state.groups.length} folders${state.searchDone?' · search complete':''}</div><div class="remote-tree" data-tree-scope="search">${remoteTree(files).map(n=>render(n,0)).join('')}</div>`+(state.searchDone&&!files.length?'<div class="empty"><h3>No results</h3><p>Try another query or check your Soulseek connection.</p></div>':'');
 }
 async function pollSearch(){
  const id=state.searchId;if(!id)return;
  try{const data=await api(`/soulseek/searches/${id}`);if(id!==state.searchId)return;state.groups=normalizeResults(data.responses);state.searchDone=Boolean(data.search.isComplete)||String(data.search.state||'').includes('Completed');if(state.searchDone)clearInterval(state.searchTimer);if(state.page==='soulseek')renderSearchResults();}
  catch(error){clearInterval(state.searchTimer);state.searchDone=true;toast(error.message,true);}
 }
-async function downloadFiles(group,files){await api('/soulseek/downloads',{method:'POST',body:{username:group.username,files:files.map(f=>({filename:f.filename,size:f.size}))}});toast(`${files.length} files queued. See Downloads for progress.`);}
-async function loadTransfers(){
- const data=await api('/soulseek/downloads');if(state.page!=='transfers')return;
- const transfers=[];
- for(const user of Array.isArray(data)?data:[])for(const directory of user.directories||[])for(const file of directory.files||[])transfers.push({...file,username:user.username});
- document.querySelector('#content').innerHTML=heading('04','Downloads','Download queue',`<button data-nav="inbox">${icon('inbox')}Inbox</button>`)+(transfers.length?`<div class="table-wrap">${transfers.map(file=>{const progress=file.size?Math.max(0,Math.min(100,(file.bytesTransferred||0)/file.size*100)):0;return `<div class="transfer"><div><h3>${esc(basename(file.filename))}</h3><p>${esc(file.username)} · ${size(file.size)} · ${esc(file.state)}</p></div><div><progress max="100" value="${progress}"></progress><span class="progress-label">${progress.toFixed(0)}%${file.averageSpeed?` · ${size(file.averageSpeed)}/s`:''}</span></div>${!String(file.state).includes('Completed')?`<button class="quiet small" data-cancel-user="${esc(file.username)}" data-cancel-id="${esc(file.id)}">Cancel</button>`:'<span class="badge">COMPLETED</span>'}</div>`;}).join('')}</div>`:`<div class="empty">${icon('download')}<h3>No downloads</h3><p>Download music from Soulseek to see it here.</p><button class="primary" data-nav="soulseek">Search music ${icon('arrow')}</button></div>`);
+async function downloadFiles(group,files){
+ const unique=[...new Map(files.map(file=>[file.filename,file])).values()];let queued=0;
+ // The API accepts at most 500 files per request; large branches use batches.
+ try{for(let i=0;i<unique.length;i+=500){const batch=unique.slice(i,i+500);await api('/soulseek/downloads',{method:'POST',body:{username:group.username,files:batch.map(f=>({filename:f.filename,size:f.size}))}});queued+=batch.length;}}
+ catch(error){throw new Error(`${queued?`${queued} files queued before the error. `:''}${error.message}`);}
+ if(unique.length>1)state.downloadBatches.set(JSON.stringify([group.username,...unique.map(f=>f.filename).sort()]),{username:group.username,files:unique.map(f=>f.filename),name:group.user?`Files from ${group.username}`:group.name||basename(group.folder||'Files')});
+ toast(`${queued} files queued. See Downloads for progress.`);loadTransfers(true).catch(()=>{});
+}
+function transferStatus(file){
+ const value=String(file.state||'');
+ if(typeof file.state==='number'){if(file.state&32)return 'complete';if(file.state&64)return 'cancelled';if(file.state&16)return 'failed';if(file.state&8)return 'active';return 'queued';}
+ if(/Succeeded/i.test(value))return 'complete';
+ if(/Cancelled/i.test(value))return 'cancelled';
+ if(/Errored|Rejected|Aborted|TimedOut|Completed/i.test(value))return 'failed';
+ return /InProgress|Initializing/i.test(value)?'active':'queued';
+}
+const transferLabels={complete:'Downloaded',cancelled:'Cancelled',failed:'Failed',active:'Downloading',queued:'Queued'};
+const transferKey=file=>JSON.stringify([file.username,file.id||file.filename]);
+const folderKey=file=>JSON.stringify([file.username,...remoteParts(file.filename).slice(0,-1)]);
+function transferProgress(files){
+ const total=files.reduce((sum,file)=>sum+(file.size||0),0);
+ const bytes=files.reduce((sum,file)=>sum+(transferStatus(file)==='complete'?(file.size||0):Math.min(file.size||0,Math.max(0,file.bytesTransferred||0))),0);
+ return total?Math.min(100,bytes/total*100):files.every(file=>transferStatus(file)==='complete')?100:0;
+}
+function notifyDownload(message){
+ let stack=document.querySelector('#download-notices');if(!stack){stack=document.createElement('div');stack.id='download-notices';stack.setAttribute('aria-live','polite');document.body.append(stack);}
+ const item=document.createElement('div');item.className='download-notice';item.innerHTML=`${icon('check')}<span>${esc(message)}</span><button class="quiet icon-button" data-action="dismiss-notice" aria-label="Dismiss notification">${icon('close')}</button>`;stack.append(item);while(stack.children.length>5)stack.firstElementChild.remove();setTimeout(()=>item.remove(),12000);
+ if('Notification' in window&&Notification.permission==='granted'){try{new Notification('me&my music',{body:message,tag:message});}catch{}}
+}
+function observeTransfers(files){
+ const previous=state.transferSeen,covered=new Set(),byRemote=new Map(files.map(f=>[JSON.stringify([f.username,f.filename]),f]));
+ for(const [key,batch] of state.downloadBatches){const matches=batch.files.map(filename=>byRemote.get(JSON.stringify([batch.username,filename])));if(matches.every(file=>file&&transferStatus(file)==='complete')){notifyDownload(`Folder downloaded: ${batch.name} · ${batch.files.length} files`);for(const file of matches)covered.add(transferKey(file));state.downloadBatches.delete(key);}}
+ if(state.transferInitialized){
+  const changed=files.filter(f=>!covered.has(transferKey(f))&&transferStatus(f)==='complete'&&previous.get(transferKey(f))!=='complete');
+  const folders=new Map();for(const file of files){const key=folderKey(file);if(!folders.has(key))folders.set(key,[]);folders.get(key).push(file);}
+  const announced=new Set();
+  for(const file of changed){const key=folderKey(file),group=folders.get(key),parts=remoteParts(file.filename);if(announced.has(key))continue;
+   if(group.length>1&&group.every(f=>transferStatus(f)==='complete')){notifyDownload(`Folder downloaded: ${parts.at(-2)||'Files'} · ${group.length} files`);announced.add(key);}
+   else notifyDownload(`File downloaded: ${basename(file.filename)}`);
+  }
+ }
+ state.transferInitialized=true;state.transferSeen=new Map(files.map(file=>[transferKey(file),transferStatus(file)]));
+}
+async function loadTransfers(fresh=false){
+ if(state.transferRequest){await state.transferRequest;if(fresh)return loadTransfers();return;}
+ const epoch=state.transferEpoch;
+ state.transferRequest=(async()=>{const data=await api('/soulseek/downloads');if(epoch!==state.transferEpoch||!document.querySelector('.shell'))return;
+  const files=[];for(const user of Array.isArray(data)?data:[])for(const directory of user.directories||[])for(const file of directory.files||[])files.push({...file,username:user.username});
+  observeTransfers(files);state.transfers=files;if(state.page==='transfers')renderTransfers();
+ })();
+ try{await state.transferRequest;}finally{state.transferRequest=null;}
+}
+function transferCompare(a,b){
+ const mode=state.transferSort;
+ if(mode==='name')return a.filename.localeCompare(b.filename);
+ if(mode==='status'){const rank={active:0,queued:1,failed:2,cancelled:3,complete:4};return rank[transferStatus(a)]-rank[transferStatus(b)]||a.filename.localeCompare(b.filename);}
+ if(mode==='progress')return transferProgress([b])-transferProgress([a])||a.filename.localeCompare(b.filename);
+ if(mode==='size')return (b.size||0)-(a.size||0)||a.filename.localeCompare(b.filename);
+ return (Date.parse(b.requestedAt)||0)-(Date.parse(a.requestedAt)||0)||a.filename.localeCompare(b.filename);
+}
+function transferNodeCompare(a,b){
+ const mode=state.transferSort;
+ if(mode==='name')return a.name.localeCompare(b.name);
+ if(mode==='size')return b.files.reduce((n,f)=>n+(f.size||0),0)-a.files.reduce((n,f)=>n+(f.size||0),0)||a.name.localeCompare(b.name);
+ if(mode==='progress')return transferProgress(b.files)-transferProgress(a.files)||a.name.localeCompare(b.name);
+ return transferCompare([...a.files].sort(transferCompare)[0],[...b.files].sort(transferCompare)[0]);
+}
+function renderTransfers(){
+ const content=document.querySelector('#content');if(!content||state.page!=='transfers')return;
+ if(!document.querySelector('#transfer-tree'))content.innerHTML=heading('04','Downloads','',`<button data-nav="inbox">${icon('inbox')}Inbox</button><button data-action="clear-downloads">${icon('trash')}Clear finished</button>`)+`<div class="list-toolbar"><label>Show<select id="transfer-filter"><option value="all">All downloads</option><option value="active">Active</option><option value="complete">Downloaded</option><option value="failed">Failed / cancelled</option></select></label><label>Sort by<select id="transfer-sort"><option value="newest">Newest first</option><option value="name">Name</option><option value="status">Status</option><option value="progress">Progress</option><option value="size">Size</option></select></label><span id="transfer-count" class="muted"></span></div><div id="transfer-tree"></div>`;
+ document.querySelector('#transfer-sort').value=state.transferSort;document.querySelector('#transfer-filter').value=state.transferFilter;
+ const all=state.transfers,filtered=all.filter(f=>state.transferFilter==='all'||(state.transferFilter==='active'?['active','queued'].includes(transferStatus(f)):state.transferFilter==='failed'?['failed','cancelled'].includes(transferStatus(f)):transferStatus(f)==='complete'));
+ document.querySelector('[data-action="clear-downloads"]').disabled=!all.some(f=>['complete','failed','cancelled'].includes(transferStatus(f)));
+ document.querySelector('#transfer-count').textContent=`${filtered.length} of ${all.length} files`;
+ rememberTree('transfers');
+ // Build before filtering, so a folder never appears complete while another child is hidden.
+ const shown=new Set(filtered.map(transferKey));
+ const render=(node,depth)=>{
+  if(!node.files.some(file=>shown.has(transferKey(file))))return '';
+  const progress=transferProgress(node.files),done=node.files.filter(f=>transferStatus(f)==='complete').length,failed=node.files.filter(f=>['failed','cancelled'].includes(transferStatus(f))).length;
+  const childNodes=[...node.children.values()].sort(transferNodeCompare);
+  const body=childNodes.map(n=>render(n,depth+1)).join('')+node.direct.filter(f=>shown.has(transferKey(f))).sort(transferCompare).map(file=>{
+   const status=transferStatus(file),percent=transferProgress([file]);
+   return `<div class="tree-file transfer-file" data-transfer-id="${esc(file.id)}">${icon('music')}<span class="tree-label">${esc(basename(file.filename))}<small>${size(file.size)} · <span class="${status==='failed'?'warning-text':''}">${transferLabels[status]}</span>${['active','queued'].includes(status)&&file.placeInQueue?` · queue: ${esc(file.placeInQueue)}`:''}</small></span><div class="tree-progress"><progress aria-label="${esc(basename(file.filename))} progress" max="100" value="${percent}"></progress><small>${percent.toFixed(0)}%${status==='active'&&file.averageSpeed?` · ${size(file.averageSpeed)}/s`:''}</small></div>${['queued','active'].includes(status)?`<button class="small quiet" data-cancel-user="${esc(file.username)}" data-cancel-id="${esc(file.id)}">Cancel</button>`:`<span class="badge${status==='failed'?' warm':''}">${transferLabels[status]}</span>`}</div>`;
+  }).join('');
+  return treeBranch('transfers',node,depth,body,`<span class="tree-progress"><progress aria-label="${esc(node.name)} progress" max="100" value="${progress}"></progress><small>${progress.toFixed(0)}%</small></span>`,`${done}/${node.files.length} downloaded${failed?` · ${failed} failed / cancelled`:''} · ${size(node.files.reduce((n,f)=>n+(f.size||0),0))}`);
+ };
+ document.querySelector('#transfer-tree').innerHTML=all.length?`<div class="remote-tree" data-tree-scope="transfers">${remoteTree(all).sort(transferNodeCompare).map(n=>render(n,0)).join('')||'<div class="empty"><h3>No downloads in this filter</h3></div>'}</div>`:`<div class="empty">${icon('download')}<h3>No downloads</h3><p>Download music from Soulseek to see it here.</p><button class="primary" data-nav="soulseek">Search music ${icon('arrow')}</button></div>`;
 }
 function matchDialog(){
  const entry=state.selected;if(!entry?.directory||root()!=='inbox')return;state.matchPath=entry.path;state.matchGeneration=(state.matchGeneration||0)+1;
@@ -188,35 +297,49 @@ async function searchReleases(artist,album){
 }
 async function makePreview(releaseId){
  const job=await api('/imports/preview',{method:'POST',body:{path:state.matchPath,release_id:releaseId}});
- showModal('Preparing preview',`<div class="loading"><span class="spinner"></span>Matching tracks and preparing tags…</div><p>You can close this window. Find the preview in Tasks.</p>`);
+ showModal('Preparing preview',`<div class="loading"><span class="spinner"></span>Matching tracks and preparing tags…</div><p>You can close this window. Find the preview in Tasks.</p>`,`<button data-cancel-job="${esc(job.id)}">Cancel task</button>`);modal.dataset.jobId=job.id;
  watchJob(job.id);
 }
 async function watchJob(id){
- let job;
- try{job=await api(`/jobs/${id}`);}catch(error){toast(error.message,true);return;}
- if(job.status==='queued'||job.status==='running'){setTimeout(()=>watchJob(id),1800);return;}
- if(job.status==='ready'){if(modal.open)renderPlan(job);else toast('Preview ready. Open it in Tasks.');}
- else if(job.status==='done'){if(modal.open)modal.close();toast(`Album imported: ${job.result.files} files. Original files remain in Inbox.`);if(['inbox','library'].includes(state.page))loadFiles().catch(()=>{});}
- else{if(modal.open)showModal('Review needed',`<div class="error-box">${esc(job.error||'Task interrupted')}</div>`);else toast(job.error||'Task interrupted',true);}
+ const epoch=state.transferEpoch;let job;
+ try{job=await api(`/jobs/${id}`);}catch(error){if(epoch===state.transferEpoch)toast(error.message,true);return;}
+ if(epoch!==state.transferEpoch||!document.querySelector('.shell'))return;
+ const ownsModal=modal.open&&modal.dataset.jobId===id;
+ if(job.status==='queued'||job.status==='running'){setTimeout(()=>{if(epoch===state.transferEpoch)watchJob(id);},1800);return;}
+ if(job.status==='ready'){if(ownsModal)renderPlan(job);else toast('Preview ready. Open it in Tasks.');}
+ else if(job.status==='done'){if(ownsModal)modal.close();toast(`Album imported: ${job.result.files} files. Original files remain in Inbox.`);if(['inbox','library'].includes(state.page))loadFiles().catch(()=>{});}
+ else if(job.status==='cancelled'){if(ownsModal)modal.close();}
+ else{if(ownsModal)showModal('Review needed',`<div class="error-box">${esc(job.error||'Task interrupted')}</div>`);else toast(job.error||'Task interrupted',true);}
  if(state.page==='jobs')loadJobs().catch(()=>{});
 }
 function renderPlan(job){
  const plan=job.result, weak=plan.confidence<90;
- showModal('Import preview',`<div class="plan-banner${weak?' warning':''}"><strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library. Original files remain in Inbox.</div>${plan.rows.map(row=>`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('')}<p class="field-help">Preview valid for one hour. Artwork and non-audio files are not copied automatically.</p>`,`<button data-action="close-modal">Back</button><button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}Import album</button>`);
+ showModal('Import preview',`<div class="plan-banner${weak?' warning':''}"><strong>${esc(plan.artist)} — ${esc(plan.album)}</strong><br>Match: ${plan.confidence}%. ${weak?'Check the track mapping carefully.':'Review the track mapping.'}<br>Create ${plan.rows.length} copies in Library. Original files remain in Inbox.</div>${plan.rows.map(row=>`<div class="plan-track"><span class="muted">${esc(row.source)}</span><div class="tag-diff"><dl>${diffTags(row.before)}</dl><div class="tag-arrow">${icon('arrow')}</div><dl>${diffTags(row.after)}</dl></div><code>${esc(row.destination)}</code></div>`).join('')}<p class="field-help">Preview valid for one hour. Artwork and non-audio files are not copied automatically.</p>`,`<button data-cancel-job="${esc(job.id)}">Reject</button><button data-action="close-modal">Back</button><button class="primary" data-apply-plan="${esc(job.id)}">${icon('check')}Import album</button>`);modal.dataset.jobId=job.id;
 }
 function diffTags(tags){return [['Track',tags.title],['Artist',tags.artist],['Album',tags.album],['Year',tags.year||'—'],['Track number',`${tags.disc||1}.${tags.track||'—'} / ${tags.tracktotal||'—'}`]].map(([key,value])=>`<dt>${key}</dt><dd>${esc(value||'—')}</dd>`).join('');}
-const statusLabels={queued:'Queued',running:'Running',ready:'Ready for review',done:'Done',applied:'Applied',applying:'Importing',failed:'Error',interrupted:'Interrupted'};
+const statusLabels={queued:'Queued',running:'Running',ready:'Ready for review',done:'Done',applied:'Applied',applying:'Importing',failed:'Error',interrupted:'Interrupted',cancelled:'Cancelled',expired:'Expired'};
 async function loadJobs(){
  const jobs=await api('/jobs');state.jobs=jobs;if(state.page!=='jobs')return;
- document.querySelector('#content').innerHTML=heading('05','Tasks','Previews and imports')+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='preview'?'Match and preview':'Import to Library'}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${job.kind==='preview'&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Check</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
+ document.querySelector('#content').innerHTML=heading('05','Tasks','',`<button data-action="clear-jobs" ${jobs.some(j=>['done','applied','failed','interrupted','cancelled','expired'].includes(j.status))?'':'disabled'}>${icon('trash')}Clear finished</button>`)+(jobs.length?`<div class="jobs-list">${jobs.map(job=>`<article class="job-card"><div><h3>${job.kind==='preview'?'Match and preview':'Import to Library'}${job.result?.album?` · ${esc(job.result.artist)} — ${esc(job.result.album)}`:''}</h3><p>${date(job.created)}${job.error?`<br>${esc(job.error)}`:''}${job.result?.files?` · ${job.result.files} files copied`:''}</p></div><div class="job-actions"><span class="badge${['failed','interrupted','expired'].includes(job.status)?' warm':''}">${esc(statusLabels[job.status]||job.status)}</span>${job.kind==='preview'&&job.status==='ready'?`<button class="small primary" data-show-plan="${esc(job.id)}">Review</button>`:''}${job.kind==='preview'&&['queued','running','ready'].includes(job.status)?`<button class="small" data-cancel-job="${esc(job.id)}">${job.status==='ready'?'Reject':'Cancel'}</button>`:''}</div></article>`).join('')}</div>`:`<div class="empty">${icon('jobs')}<h3>No tasks</h3><p>Match an album in Inbox to create a preview.</p></div>`);
 }
-async function loadHistory(){
- const events=await api('/history');if(state.page!=='history')return;
- document.querySelector('#content').innerHTML=heading('06','History','Recent operations')+(events.length?`<div class="jobs-list">${events.map(event=>{const d=event.data;const titles={move:'Move / rename',mkdir:'Create folder',delete:'Delete',import:'Import album',download:'Soulseek download'};const detail=event.kind==='move'?`${d.source} → ${d.destination}`:['mkdir','delete'].includes(event.kind)?d.path:event.kind==='import'?`${d.artist} — ${d.album} · ${d.files} files`:`${d.username} · ${d.files} files`;return `<article class="job-card"><div><h3>${titles[event.kind]||esc(event.kind)}</h3><p>${esc(detail)}<br>${date(event.created)}${d.root?` · ${d.root==='inbox'?'Inbox':'Library'}`:''}</p></div>${event.undone?'<span class="badge">Undone</span>':['move','mkdir'].includes(event.kind)?`<button class="small" data-undo="${event.id}">${icon('history')}Undo</button>`:''}</article>`;}).join('')}</div>`:`<div class="empty">${icon('history')}<h3>No history</h3><p>File operations will appear here.</p></div>`);
+const historyTitles={move:'Moved / renamed',mkdir:'Folder created',delete:'Deleted',import:'Album imported',download:'Download queued'};
+async function loadHistory(){state.history=await api('/history');if(state.page==='history')renderHistory();}
+function renderHistory(){
+ const content=document.querySelector('#content');
+ content.innerHTML=heading('06','History','')+`<div class="list-toolbar"><label>Operation<select id="history-filter"><option value="all">All operations</option>${Object.entries(historyTitles).map(([id,label])=>`<option value="${id}">${label}</option>`).join('')}</select></label><span class="muted">Latest 100 operations</span></div><div id="history-timeline"></div>`;
+ document.querySelector('#history-filter').value=state.historyFilter;
+ const events=state.history.filter(e=>state.historyFilter==='all'||e.kind===state.historyFilter),days=new Map();
+ for(const event of events){const day=new Date(event.created*1000).toLocaleDateString('en-GB',{day:'numeric',month:'long',year:'numeric'});if(!days.has(day))days.set(day,[]);days.get(day).push(event);}
+ document.querySelector('#history-timeline').innerHTML=events.length?[...days].map(([day,items])=>`<section class="history-day"><h2>${esc(day)}</h2><ol class="history-timeline">${items.map(event=>{
+  const d=event.data,kind=event.kind,detail=kind==='move'?`<span class="history-path">${esc(d.source)}</span>${icon('arrow')}<span class="history-path">${esc(d.destination)}</span>`:['mkdir','delete'].includes(kind)?`<span class="history-path">${esc(d.path)}</span>`:kind==='import'?`${esc(d.artist)} — ${esc(d.album)}<span class="muted"> · ${esc(d.files)} files</span>`:`${esc(d.username)}<span class="muted"> · ${esc(d.files)} files</span>`;
+  return `<li class="history-event${event.undone?' undone':''}"><span class="history-marker">${icon(({move:'move',mkdir:'folder',delete:'trash',import:'disc',download:'download'})[kind]||'history')}</span><time datetime="${new Date(event.created*1000).toISOString()}">${new Date(event.created*1000).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</time><div class="history-body"><div class="history-title"><strong>${esc(historyTitles[kind]||kind)}</strong>${d.root?`<span class="badge">${d.root==='inbox'?'Inbox':'Library'}</span>`:''}${event.undone?'<span class="badge">Undone</span>':''}</div><div class="history-detail">${detail}</div></div>${!event.undone&&['move','mkdir'].includes(kind)?`<button class="small quiet" data-undo="${esc(event.id)}">${icon('history')}Undo</button>`:''}</li>`;
+ }).join('')}</ol></section>`).join(''):'<div class="empty"><h3>No operations</h3><p>File operations and queued downloads will appear here.</p></div>';
 }
+function notificationSetting(){return !('Notification' in window)?'Browser notifications are unavailable. Download notices appear in the app.':Notification.permission==='granted'?'Browser notifications enabled.':Notification.permission==='denied'?'Browser notifications are blocked. Change the permission in your browser settings.':'Show a browser notification when a download finishes.';}
 function renderSettings(){
  const system=state.system;
  document.querySelector('#content').innerHTML=heading('07','Settings','Accounts and services',`<button data-action="refresh-system">${icon('refresh')}Check</button>`)+`
+ <section class="preferences-panel"><div class="preference-row"><div><h2>Appearance</h2><p>Theme</p></div>${themePicker()}</div><div class="preference-row"><div><h2>Download notifications</h2><p id="notification-status">${notificationSetting()}</p></div>${'Notification' in window&&Notification.permission==='default'?'<button data-action="enable-notifications">Enable</button>':''}</div><div class="preference-row"><div><h2>Session</h2><p>Sign out of the music manager.</p></div><button data-action="logout">${icon('logout')}Sign out</button></div></section>
  <section id="soulseek-account" class="account-panel" aria-label="Soulseek account"></section>
  <div class="connection-grid"><article class="connection">${icon('search')}<h2>slskd</h2><p>Search and downloads</p><span class="badge${system?.slskd?'':' warm'}">${system?.slskd?'API available':'API unavailable'}</span></article><article class="connection">${icon('disc')}<h2>beets + MusicBrainz</h2><p>Album matching and tagging</p><span class="badge">beets installed</span></article><article class="connection">${icon('music')}<h2>Navidrome</h2><p>Point Navidrome at the Library folder.</p>${system?.navidrome_url?`<a href="${esc(system.navidrome_url)}" target="_blank" rel="noreferrer">Open Navidrome ↗</a>`:'<p>Set NAVIDROME_URL to add a shortcut.</p>'}</article></div>`;
  renderAccountPanel();
@@ -309,6 +432,9 @@ document.addEventListener('drop',async event=>{
 });
 document.addEventListener('dragend',()=>{if(state.drag)finishDrag();});
 document.addEventListener('change',event=>{
+ if(event.target.id==='transfer-sort'){state.transferSort=event.target.value;renderTransfers();}
+ if(event.target.id==='transfer-filter'){state.transferFilter=event.target.value;renderTransfers();}
+ if(event.target.id==='history-filter'){state.historyFilter=event.target.value;renderHistory();}
  if(event.target.matches('[data-theme-picker]')){const value=event.target.value;if(!themes[value])return;applyMusicTheme(value);try{localStorage.setItem('mmm-theme',value);}catch{}document.querySelectorAll('[data-theme-picker]').forEach(select=>select.value=value);}
 });
 document.addEventListener('keydown',event=>{
@@ -324,11 +450,12 @@ document.addEventListener('click',async event=>{
   if(button.dataset.open){await openFolder(button.dataset.open);return;}
   if(button.dataset.play){playFile(button.dataset.play);return;}
   if(button.dataset.select){selectFile(button.dataset.select);return;}
-  if(button.dataset.downloadGroup){button.disabled=true;const group=state.groups[Number(button.dataset.downloadGroup)];await downloadFiles(group,group.files);return;}
-  if(button.dataset.downloadFile){button.disabled=true;const [g,f]=button.dataset.downloadFile.split(':').map(Number);await downloadFiles(state.groups[g],[state.groups[g].files[f]]);return;}
-  if(button.dataset.cancelId){await api(`/soulseek/downloads/${encodeURIComponent(button.dataset.cancelUser)}/${button.dataset.cancelId}`,{method:'DELETE'});await loadTransfers();return;}
+  if(button.dataset.downloadTree){event.preventDefault();button.disabled=true;const node=state.searchNodes.get(button.dataset.downloadTree);if(node)await downloadFiles(node,node.files);return;}
+  if(button.dataset.downloadFile){event.preventDefault();button.disabled=true;const [g,f]=button.dataset.downloadFile.split(':').map(Number);await downloadFiles(state.groups[g],[state.groups[g].files[f]]);return;}
+  if(button.dataset.cancelId){button.disabled=true;await api(`/soulseek/downloads/${encodeURIComponent(button.dataset.cancelUser)}/${button.dataset.cancelId}`,{method:'DELETE'});await loadTransfers(true);return;}
   if(button.dataset.release){button.disabled=true;await makePreview(button.dataset.release);return;}
-  if(button.dataset.applyPlan){button.disabled=true;const job=await api(`/imports/${button.dataset.applyPlan}/apply`,{method:'POST'});showModal('Importing album',`<div class="loading"><span class="spinner"></span>Writing tags and copying files…</div><p>You can close this window and follow progress in Tasks.</p>`);watchJob(job.id);return;}
+  if(button.dataset.applyPlan){button.disabled=true;const job=await api(`/imports/${button.dataset.applyPlan}/apply`,{method:'POST'});showModal('Importing album',`<div class="loading"><span class="spinner"></span>Writing tags and copying files…</div><p>You can close this window and follow progress in Tasks.</p>`);modal.dataset.jobId=job.id;watchJob(job.id);return;}
+  if(button.dataset.cancelJob){button.disabled=true;await api(`/jobs/${button.dataset.cancelJob}/cancel`,{method:'POST'});if(modal.open)modal.close();toast('Task cancelled.');if(state.page==='jobs')await loadJobs();return;}
   if(button.dataset.showPlan){const job=await api(`/jobs/${button.dataset.showPlan}`);if(job.status==='ready')renderPlan(job);else toast('This preview was already applied or has expired.',true);return;}
   if(button.dataset.undo){button.disabled=true;await api(`/history/${button.dataset.undo}/undo`,{method:'POST'});toast('Operation undone');await loadHistory();return;}
   const action=button.dataset.action;
@@ -341,6 +468,10 @@ document.addEventListener('click',async event=>{
   else if(action==='close-modal')modal.close();
   else if(action==='reload')await navigate(state.page);
   else if(action==='view-grid'||action==='view-list'){state.view=action==='view-grid'?'grid':'list';renderFileList();}
+  else if(action==='dismiss-notice')button.closest('.download-notice')?.remove();
+  else if(action==='clear-downloads'){button.disabled=true;await api('/soulseek/downloads/completed',{method:'DELETE'});await loadTransfers(true);toast('Finished downloads cleared. Files remain in Inbox.');}
+  else if(action==='clear-jobs'){button.disabled=true;const result=await api('/jobs',{method:'DELETE'});await loadJobs();toast(`${result.cleared} finished tasks cleared.`);}
+  else if(action==='enable-notifications'){await Notification.requestPermission();renderSettings();}
   else if(action==='logout'){await api('/logout',{method:'POST'});showLogin();}
   else if(action==='close-player'){document.querySelector('#player-slot').innerHTML='';state.player=null;}
   else if(action==='refresh-system'){button.disabled=true;state.system=await api('/system');await refreshAccount();updateStatus();renderSettings();}
@@ -374,7 +505,7 @@ document.addEventListener('submit',async event=>{
   else if(form.id==='soulseek-form'){
    clearInterval(state.searchTimer);if(state.searchId&&!state.searchDone)await api(`/soulseek/searches/${state.searchId}`,{method:'DELETE'}).catch(()=>{});
    state.searchQuery=String(values.get('query')).trim();const result=await api('/soulseek/searches',{method:'POST',body:{query:state.searchQuery}});
-   state.searchId=result.id;state.groups=[];state.searchDone=false;
+   document.querySelector('#search-results').innerHTML='';state.searchId=result.id;state.groups=[];state.searchDone=false;for(const key of state.treeOpen.keys())if(key.startsWith('["search",'))state.treeOpen.delete(key);
    if(!state.searchId)throw new Error('slskd did not return a search ID');
    renderSoulseek();await pollSearch();if(!state.searchDone)state.searchTimer=setInterval(pollSearch,2000);
   }

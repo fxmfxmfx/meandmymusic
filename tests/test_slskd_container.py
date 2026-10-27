@@ -27,6 +27,7 @@ async def test_pinned_slskd_key_admin_login_config_reload_and_tmpfs(tmp_path):
     client = Soulseek(settings)
     account = SoulseekAccount(settings, client)
     assert isinstance(await client.request("GET", "/application"), dict)
+    assert await client.request("DELETE", "/transfers/downloads/all/completed") == {}
     container = subprocess.check_output(["docker", "compose", "ps", "-q", "slskd"], text=True).strip()
     inspected = json.loads(subprocess.check_output(["docker", "inspect", container], text=True))[0]
     # Compose's short tmpfs syntax is represented under HostConfig.Tmpfs,

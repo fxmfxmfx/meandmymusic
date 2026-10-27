@@ -43,6 +43,7 @@ def parser():
     download.add_argument("--user", required=True)
     download.add_argument("--files", type=Path, required=True, help='JSON array of {"filename": "remote path", "size": 123}')
     sub.add_parser("downloads")
+    sub.add_parser("clear-downloads", help="Remove finished transfer records; keep downloaded files")
     releases = sub.add_parser("releases", help="Search MusicBrainz release editions")
     releases.add_argument("query")
     preview = sub.add_parser("preview", help="Match one inbox album to an exact release; does not modify music")
@@ -53,6 +54,9 @@ def parser():
     apply.add_argument("plan_id")
     apply.add_argument("--wait", action="store_true")
     sub.add_parser("jobs")
+    sub.add_parser("clear-jobs", help="Clear finished tasks from the list")
+    cancel = sub.add_parser("cancel-job", help="Cancel or reject an album preview")
+    cancel.add_argument("job_id")
     job = sub.add_parser("job")
     job.add_argument("job_id")
     job.add_argument("--wait", action="store_true")
@@ -75,7 +79,7 @@ def execute(args, client):
         while True:
             job = call("GET", f"/jobs/{job_id}")
             if job["status"] not in {"queued", "running"}:
-                if job["status"] in {"failed", "interrupted"}:
+                if job["status"] in {"failed", "interrupted", "cancelled", "expired"}:
                     raise RuntimeError(job.get("error") or job["status"])
                 return job
             if time.monotonic() >= deadline:
@@ -135,6 +139,12 @@ def execute(args, client):
         return call("POST", "/soulseek/downloads", {"username": args.user, "files": files})
     if c == "downloads":
         return call("GET", "/soulseek/downloads")
+    if c == "clear-downloads":
+        return call("DELETE", "/soulseek/downloads/completed")
+    if c == "clear-jobs":
+        return call("DELETE", "/jobs")
+    if c == "cancel-job":
+        return call("POST", f"/jobs/{args.job_id}/cancel")
     if c == "releases":
         return call("GET", "/musicbrainz/releases", params={"query": args.query})
     if c == "preview":
