@@ -297,6 +297,9 @@ test('search tree keeps peers separate and downloads a parent branch with nested
   assert.deepEqual(call.body,{username:'Peer "A"',files});assert.equal(albumBranch.open,true);
   await f.window.testPollSearch();
   assert.equal([...f.window.document.querySelectorAll('details')].find(el=>el.dataset.treeKey===key).open,true);
+  f.setTransfers([{username:'Peer "A"',directories:[{files:files.map((file,index)=>({...file,id:index,state:'Completed, Succeeded',bytesTransferred:file.size}))}]}]);await f.poll();
+  assert.match(f.window.document.querySelector('#download-notices').textContent,/Folder downloaded: Album · 2 files/);
+  assert.equal(f.window.document.querySelectorAll('.download-notice').length,1);
   f.click('[data-nav="library"]');await tick();assert.ok(!f.window.document.querySelector('#slskd-status'));
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}

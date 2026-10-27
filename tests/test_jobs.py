@@ -23,7 +23,7 @@ def test_reject_preview_prevents_import_and_cleanup_keeps_polling_record(auth, s
 
 
 def test_running_preview_cannot_resurrect_after_cancel_and_queued_work_is_skipped(auth, settings, monkeypatch):
-    for name in ['First', 'Second']:
+    for name in ['First', 'Second', 'Third']:
         (settings.inbox / name).mkdir()
     started, release = threading.Event(), threading.Event()
     calls = []
@@ -42,12 +42,14 @@ def test_running_preview_cannot_resurrect_after_cancel_and_queued_work_is_skippe
         assert auth.delete('/api/jobs').json()['cleared'] == 2
     finally:
         release.set()
-    # Lifespan will also join the worker; finish_job refuses a cancelled record.
+    # A sentinel behind both jobs proves the worker finished the cancelled work.
+    third = auth.post('/api/imports/preview', json={'path':'Third', 'release_id':RELEASE}).json()['id']
+    assert wait_job(auth, third)['status'] == 'ready'
     store = auth.app.state.store
     assert not store.finish_job(first, 'ready', result={'rows':[]})
     assert store.get_job(first)['status'] == 'cancelled'
     assert store.get_job(second)['status'] == 'cancelled'
-    assert calls == ['First']
+    assert calls == ['First', 'Third']
 
 
 def test_cleanup_preserves_active_and_review_tasks_and_expired_previews_are_unusable(auth):
