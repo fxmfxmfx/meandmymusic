@@ -21,7 +21,7 @@ def test_extended_search_uses_extended_slskd_limits(auth, monkeypatch):
             "/searches",
             {
                 "searchText": "Artist name",
-                "searchTimeout": 30,
+                "searchTimeout": 30000,
                 "fileLimit": 10000,
                 "responseLimit": 250,
             },

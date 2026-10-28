@@ -492,7 +492,8 @@ def create_app(settings=None):
             raise HTTPException(400, "Search query must contain at least 2 characters")
         payload = {"searchText": query, "fileLimit": 3000, "responseLimit": 100}
         if data.mode == "extended":
-            payload.update({"searchTimeout": 30, "fileLimit": 10000, "responseLimit": 250})
+            # slskd exposes this quiet-period timeout in milliseconds.
+            payload.update({"searchTimeout": 30000, "fileLimit": 10000, "responseLimit": 250})
         return await soulseek.request("POST", "/searches", payload)
 
     @app.get("/api/soulseek/searches/{search_id}")
