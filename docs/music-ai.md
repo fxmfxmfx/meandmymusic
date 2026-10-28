@@ -53,7 +53,8 @@ the saved task and may begin its download/import steps when their checks pass.
 The agent does not poll a model forever.
 
 Automatic import is limited to an exact recommended edition that matches at
-least 95% match confidence, has a complete preview, and has cleanup disabled.
+least 95% match confidence and has a complete preview. Agent previews explicitly
+keep Inbox originals, even when cleanup is enabled for other imports.
 The score is a ranking signal, not a probability. Inbox originals remain. An
 artist-only request may select one album only from verified releases; ambiguous
 results stop for review. Ambiguous matches, incomplete previews and failed checks
@@ -67,6 +68,12 @@ and highest reported speed. Reported availability is not a guarantee that a
 peer will begin transferring. Format checks use `.flac` filenames; the agent
 does not prove lossless provenance or perform audio fingerprint recognition.
 MusicBrainz matching and preview checks run after the download.
+
+If the combined artist/album search finds no complete source, the agent tries
+an extended search using the album title. Artist and album checks still apply
+to the returned paths. Searches with no peer replies report `no_replies`, rather
+than claiming the album has no FLAC release. Resuming a task with empty saved
+sources performs a new bounded search; it does not reuse the empty result forever.
 
 The model runs on CPU with a single parallel request and an 8192-token context;
 searches and decisions can take several minutes. Check the service with

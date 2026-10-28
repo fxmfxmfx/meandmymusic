@@ -16,6 +16,15 @@ class AgentError(RuntimeError):
     """An actionable, sanitized workflow failure."""
 
 
+class SearchUnavailable(AgentError):
+    """A completed Soulseek search that received no peer replies."""
+
+    def __init__(self, message, *, reason="no_replies", details=None):
+        super().__init__(message)
+        self.reason = reason
+        self.details = details or []
+
+
 def normalize(value: str) -> str:
     value = unicodedata.normalize("NFKD", str(value or ""))
     value = "".join(ch for ch in value if not unicodedata.combining(ch)).casefold()
@@ -115,10 +124,10 @@ def _safe_remote(path):
     return "\x00" not in raw and not p.is_absolute() and all(x not in ("", ".", "..") for x in raw.split("/"))
 
 
-def _get_search(api, query, wait, progress):
-    started = api.post("/api/soulseek/searches", json={"query": query, "mode": "standard"})
+def _get_search(api, query, wait, progress, *, mode="standard"):
+    started = api.post("/api/soulseek/searches", json={"query": query, "mode": mode})
     sid = started.get("id") if isinstance(started, dict) else None
-    if not sid: return []
+    if not sid: raise AgentError("Manager did not start the Soulseek search. Check the Soulseek connection and retry.")
     deadline = time.monotonic() + wait
     previous = None
     while time.monotonic() < deadline:
@@ -131,6 +140,8 @@ def _get_search(api, query, wait, progress):
         flags = {part.strip().casefold() for k in ("state", "status") for part in str(status.get(k, "")).split(",")}
         terminal = status.get("isComplete") is True or bool(flags & {"completed", "cancelled", "timedout", "errored"})
         if terminal:
+            if flags & {"cancelled", "errored"}:
+                raise AgentError("Soulseek search was cancelled or failed before results were available.")
             if not isinstance(responses, list):
                 # Fetch terminal snapshot once more; manager validates delivered counters.
                 snapshot = api.get(f"/api/soulseek/searches/{quote(str(sid), safe='')}")
@@ -138,8 +149,11 @@ def _get_search(api, query, wait, progress):
             if not isinstance(responses, list) or not all(type(status.get(k)) is int for k in ("responseCount", "fileCount", "lockedFileCount")):
                 time.sleep(min(0.2, max(0, deadline-time.monotonic())))
                 continue
-            if (len(responses) != status["responseCount"] or sum(len(x.get("files", [])) for x in responses) != status["fileCount"] or
-                sum(len(x.get("lockedFiles", [])) for x in responses) != status["lockedFileCount"]):
+            if (not all(isinstance(x, dict) for x in responses) or
+                len(responses) != status["responseCount"] or
+                sum(len(x.get("files", [])) for x in responses if isinstance(x.get("files", []), list)) != status["fileCount"] or
+                any(not isinstance(x.get("files", []), list) or not isinstance(x.get("lockedFiles", []), list) for x in responses) or
+                sum(len(x.get("lockedFiles", [])) for x in responses if isinstance(x.get("lockedFiles", []), list)) != status["lockedFileCount"]):
                 time.sleep(min(0.2, max(0, deadline-time.monotonic())))
                 continue
             return responses if isinstance(responses, list) else []
@@ -149,16 +163,26 @@ def _get_search(api, query, wait, progress):
 
 def search_sources(api, release, *, wait=70, progress=None):
     artist, album = _release_artist(release), _release_title(release)
-    queries = [f"{artist} {album}"]
-    ascii_query = unicodedata.normalize("NFKD", queries[0]).encode("ascii", "ignore").decode()
-    if ascii_query.strip() and ascii_query != queries[0] and normalize(ascii_query) == normalize(queries[0]):
-        queries.append(ascii_query)
+    combined = f"{artist} {album}".strip()
+    attempts = [(combined, "standard")]
+    ascii_query = unicodedata.normalize("NFKD", combined).encode("ascii", "ignore").decode().strip()
+    if ascii_query and ascii_query != combined and normalize(ascii_query) == normalize(combined):
+        attempts.append((ascii_query, "standard"))
     groups = {}
-    for query in queries[:2]:
-        for peer in _get_search(api, query, wait, progress):
+    diagnostics = []
+
+    def collect(query, mode):
+        responses = _get_search(api, query, wait, progress, mode=mode)
+        file_count = 0
+        for peer in responses:
+            peer_files = peer.get("files", [])
+            if isinstance(peer_files, list): file_count += len(peer_files)
+        diagnostics.append({"query": query, "mode": mode, "replies": len(responses), "files": file_count, "terminal": "completed"})
+        for peer in responses:
             username = peer.get("username")
             if not isinstance(username, str) or not username: continue
-            for file in peer.get("files", []):
+            for file in peer.get("files", []) if isinstance(peer.get("files", []), list) else []:
+                if not isinstance(file, dict): continue
                 path, size = file.get("filename"), file.get("size")
                 if not isinstance(path, str) or not _safe_remote(path): continue
                 normalized_path = path.replace("\\", "/")
@@ -174,6 +198,25 @@ def search_sources(api, release, *, wait=70, progress=None):
                 group = groups.setdefault(key, {"username": username, "directory": directory, "files": {}, "free_slots": peer.get("hasFreeUploadSlot"), "speed": peer.get("uploadSpeed"), "queue": peer.get("queueLength")})
                 if path in group["files"] and group["files"][path] != size: group["files"].pop(path, None); group["conflict"] = True
                 elif not group.get("conflict"): group["files"][path] = size
+
+    for query, mode in attempts:
+        collect(query, mode)
+    output = build_sources(groups, release)
+    # Broaden the query when the combined terms produce no complete source.
+    # All original album/path/count/size checks remain in force while collecting.
+    if not output and album.strip():
+        album_query = album.strip()
+        if all(normalize(album_query) != normalize(q) for q, _ in attempts):
+            collect(album_query, "extended")
+            attempts.append((album_query, "extended"))
+            output = build_sources(groups, release)
+    if not any(item["replies"] for item in diagnostics):
+        raise SearchUnavailable("No Soulseek users replied to the completed searches.", details=diagnostics)
+    return sort_sources(output)
+
+
+def build_sources(groups, release):
+    artist, album = _release_artist(release), _release_title(release)
     output = []
     for group in groups.values():
         files = group["files"]
@@ -181,6 +224,10 @@ def search_sources(api, release, *, wait=70, progress=None):
         total = sum(files.values())
         if total > 8 * 1024**3: continue
         output.append({"username": group["username"], "directory": group["directory"], "files": [{"filename": p, "size": s} for p,s in sorted(files.items())], "total_bytes": total, "free_slots": group["free_slots"], "speed": group["speed"], "queue": group["queue"]})
+    return output
+
+
+def sort_sources(output):
     def number(value):
         return value if type(value) in (int, float) and math.isfinite(value) and value >= 0 else 0
     return sorted(output, key=lambda s: (s['free_slots'] is not True, number(s['queue']), -number(s['speed'])))
@@ -259,7 +306,7 @@ def get_match(api, path, release):
 
 
 def create_preview(api, path, release):
-    return api.post("/api/imports/preview", json={"path":path, "release_id":release["id"]})
+    return api.post("/api/imports/preview", json={"path":path, "release_id":release["id"], "keep_source":True})
 
 
 def _finite_confidence(value):

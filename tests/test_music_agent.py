@@ -140,6 +140,29 @@ def test_plan_never_queues_or_applies(workflow):
     assert not calls
 
 
+def test_empty_saved_sources_are_researched_on_resume(workflow, monkeypatch):
+    task, store, api, model, source, calls = workflow
+    task.update(phase="sources", sources=[], release={"artist": "Artist", "title": "Album"})
+    searches = []
+    def search(*args, **kwargs):
+        searches.append(True)
+        return [source]
+    monkeypatch.setattr(agent, "search_sources", search)
+    result = agent.run_workflow(task, store, api, model, plan=True)
+    assert searches == [True] and result["status"] == "planned"
+    assert task["source"] == source and not calls
+
+
+def test_nonempty_saved_sources_do_not_repeat_network_search(workflow, monkeypatch):
+    task, store, api, model, source, calls = workflow
+    task.update(phase="sources", sources=[source])
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Previously found candidates must not be discarded")
+    monkeypatch.setattr(agent, "search_sources", forbidden)
+    assert agent.run_workflow(task, store, api, model, plan=True)["status"] == "planned"
+    assert not calls
+
+
 def test_uncertain_queue_is_not_repeated(workflow, monkeypatch):
     task, store, api, model, source, calls = workflow
     task.update(phase="queuing", source=source)
@@ -226,6 +249,7 @@ def test_full_api_workflow_uses_real_validation_and_import_contract(tmp_path):
             return httpx.Response(200, json={"recommended_release_id": release["id"], "candidates": [
                 {**release, "confidence": 99, "missing_tracks": 0, "extra_files": 0}]})
         if path == "/api/imports/preview":
+            assert json.loads(request.content)["keep_source"] is True
             return httpx.Response(200, json={"id": "preview-id"})
         if path == "/api/jobs/preview-id":
             return httpx.Response(200, json=preview)

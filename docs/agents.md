@@ -93,6 +93,8 @@ candidates; it does not write files. The CLI `releases` command remains a plain
 text search and is not equivalent to metadata matching.
 
 `POST /api/imports/preview` accepts `path` and `release_id`, returning a task ID.
+The optional strict boolean `keep_source: true` retains Inbox originals for that
+preview regardless of the global cleanup preference, without changing it.
 `GET /api/jobs/ID` transitions through `queued`, `running` and `ready` with a plan
 in `result`. `POST /api/imports/ID/apply` returns a **new** import task ID. Its final
 successful status is `done`; the original preview becomes `applied`.
@@ -129,7 +131,8 @@ Inbox include per-entry `processing` counts and match/import badges.
 
 `GET /api/preferences` and `PATCH /api/preferences` read/set the strict boolean
 `delete_inbox_after_import` (default false). Cleanup is captured in new previews;
-changing the preference before apply returns 409 and requires a new preview.
+changing the preference before applying a standard preview returns 409 and
+requires a new preview. A `keep_source` preview always retains its source.
 A successful import reports `cleanup.status` as `kept`, `deleted`, `skipped` or
 `failed`; cleanup failure does not mean the Library import failed.
 

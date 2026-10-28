@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.music_agent_core import (AgentError, MusicAPI, discover_inbox, inspect_preview,
+from app.music_agent_core import (AgentError, SearchUnavailable, MusicAPI, discover_inbox, inspect_preview,
                                   normalize, release_candidates, search_sources, transfer_status)
 
 
@@ -63,8 +63,63 @@ def test_cyrillic_search_does_not_send_empty_ascii_fallback():
         def get(self, path):
             return {'search': {'isComplete': True, 'responseCount': 0, 'fileCount': 0, 'lockedFileCount': 0}, 'responses': []}
     api = API()
-    assert search_sources(api, {'artist': 'Земфира', 'title': 'Вендетта', 'tracks': 15}) == []
-    assert api.queries == ['Земфира Вендетта']
+    with pytest.raises(SearchUnavailable):
+        search_sources(api, {'artist': 'Земфира', 'title': 'Вендетта', 'tracks': 15})
+    assert api.queries == ['Земфира Вендетта', 'Вендетта']
+
+
+def test_album_only_extended_search_recovers_complete_source_and_keeps_validation():
+    release = {'artist': 'Overmono', 'title': 'Cash Romantic', 'tracks': 2}
+    class API:
+        def __init__(self): self.calls = []
+        def post(self, path, json):
+            self.calls.append((json['query'], json['mode']))
+            return {'id': str(len(self.calls))}
+        def get(self, path):
+            query = self.calls[-1][0]
+            if query != 'Cash Romantic': responses = []
+            else:
+                responses = [
+                    {'username': 'right', 'files': [
+                        {'filename': 'Overmono - Cash Romantic/01.flac', 'size': 10},
+                        {'filename': 'Overmono - Cash Romantic/02.flac', 'size': 20}]},
+                    {'username': 'wrong-album', 'files': [
+                        {'filename': 'Overmono - Other/01.flac', 'size': 10},
+                        {'filename': 'Overmono - Other/02.flac', 'size': 20}]},
+                ]
+            files = sum(len(peer['files']) for peer in responses)
+            return {'search': {'isComplete': True, 'responseCount': len(responses), 'fileCount': files,
+                               'lockedFileCount': 0}, 'responses': responses}
+    api = API()
+    found = search_sources(api, release, wait=0.5)
+    assert api.calls == [('Overmono Cash Romantic', 'standard'), ('Cash Romantic', 'extended')]
+    assert [source['username'] for source in found] == ['right']
+
+
+def test_nonzero_responses_without_valid_album_return_empty_and_report_checks():
+    class API:
+        def post(self, path, json): return {'id': 's'}
+        def get(self, path):
+            peer = {'username': 'peer', 'files': [{'filename': 'Other Album/01.flac', 'size': 10}]}
+            return {'search': {'isComplete': True, 'responseCount': 1, 'fileCount': 1, 'lockedFileCount': 0},
+                    'responses': [peer]}
+    assert search_sources(API(), {'artist': 'Artist', 'title': 'Album', 'tracks': 1}, wait=0.5) == []
+
+
+def test_empty_fallback_sequence_is_bounded_and_reports_queries():
+    class API:
+        calls = []
+        def post(self, path, json):
+            self.calls.append((json['query'], json['mode']))
+            return {'id': str(len(self.calls))}
+        def get(self, path):
+            return {'search': {'isComplete': True, 'responseCount': 0, 'fileCount': 0, 'lockedFileCount': 0},
+                    'responses': []}
+    api = API()
+    with pytest.raises(SearchUnavailable) as error:
+        search_sources(api, {'artist': 'Beyoncé', 'title': 'Café', 'tracks': 1}, wait=0.5)
+    assert len(api.calls) == 3
+    assert [item['query'] for item in error.value.details] == ['Beyoncé Café', 'Beyonce Cafe', 'Café']
 
 
 @pytest.mark.parametrize("state,expected", [("Completed, Errored", "failed"), ("Cancelled, Succeeded", "failed"), ("Completed, TimedOut", "failed"), ("Completed, Rejected", "failed"), ("Completed", "waiting"), ("Completed, Succeeded", "complete")])

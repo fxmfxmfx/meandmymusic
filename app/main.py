@@ -67,6 +67,7 @@ class Download(BaseModel):
 class Preview(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     release_id: UUID
+    keep_source: StrictBool = False
 
 
 class AlbumMatch(BaseModel):
@@ -185,11 +186,13 @@ def create_app(settings=None):
     def root(name):
         return settings.library if name == "library" else settings.inbox
 
-    def prepare_preview(settings, source, release_id):
-        delete_source = store.preferences()['delete_inbox_after_import']
+    def prepare_preview(settings, source, release_id, keep_source=False):
+        delete_source = store.preferences()['delete_inbox_after_import'] and not keep_source
         digest, _ = snapshot(settings, source)
         result = preview(settings, source, release_id)
         result['delete_source'] = delete_source
+        if keep_source:
+            result['keep_source'] = True
         if digest != snapshot(settings, source)[0]:
             raise HTTPException(409, 'Inbox folder changed while preparing the preview. Try again.')
         old = store.matches().get(source)
@@ -573,7 +576,7 @@ def create_app(settings=None):
     @app.post("/api/imports/preview")
     def preview_import(data: Preview):
         safe_path(settings.inbox, data.path, allow_root=False)
-        return run_job("preview", prepare_preview, data.path, str(data.release_id), job_source=data.path)
+        return run_job("preview", prepare_preview, data.path, str(data.release_id), data.keep_source, job_source=data.path)
 
     @app.post('/api/imports/manual-preview')
     def manual_preview(data: ManualImport):
@@ -625,7 +628,8 @@ def create_app(settings=None):
         result = plan['result'].get('plan') if plan['kind'] == 'match' else plan['result']
         if not result:
             raise HTTPException(409, 'Review the match and choose a release first')
-        if bool(result.get('delete_source')) != store.preferences()['delete_inbox_after_import']:
+        keep_source_override = result.get('keep_source') is True and result.get('delete_source') is False
+        if bool(result.get('delete_source')) != store.preferences()['delete_inbox_after_import'] and not keep_source_override:
             raise HTTPException(409, 'Import cleanup setting changed. Create a new preview before importing.')
         if not store.claim_plan(str(plan_id)):
             raise HTTPException(409, "This preview is already in use")

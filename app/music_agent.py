@@ -215,7 +215,7 @@ class TaskStore:
 
 def summary(task):
     value = {k: task[k] for k in ("id", "request", "phase", "status", "intent", "release",
-             "inbox", "preview_id", "import_id", "result", "error") if k in task}
+             "inbox", "preview_id", "import_id", "result", "error", "error_code", "search_attempts") if k in task}
     if "source" in task:
         source = task["source"]
         value["source"] = {k: source.get(k) for k in ("username", "directory", "total_bytes")}
@@ -232,17 +232,27 @@ def run_workflow(task, store, api, model, *, plan=False, wait=3600, poll=10):
             task["phase"] = phase
         task["updated"] = time.time()
         task.pop("error", None)
+        task.pop("error_code", None)
+        task.pop("search_attempts", None)
         store.save(task)
         emit("progress", task=task["id"], phase=task["phase"])
 
     checkpoint(status="running")
+    if task["phase"] == "sources" and not task.get("sources"):
+        # An empty discovery snapshot is not a permanent result. In particular,
+        # older tasks cached a zero-reply search and could never resume it.
+        checkpoint("release")
     if task["phase"] == "start":
         emit("model", decision="identify_album")
         checkpoint("intent", intent=model.intent(task["request"]))
     if task["phase"] == "intent":
         candidates = release_candidates(api, **task["intent"])
-        emit("model", decision="choose_release", candidates=len(candidates))
-        index = model.choose("release", task["request"], candidates)
+        if len(candidates) == 1:
+            index = 0
+            emit("release", candidates=1, policy="Only verified release")
+        else:
+            emit("model", decision="choose_release", candidates=len(candidates))
+            index = model.choose("release", task["request"], candidates)
         checkpoint("release", release=candidates[index])
     if task["phase"] == "release":
         emit("search", artist=task["release"]["artist"], album=task["release"]["title"])
@@ -261,9 +271,6 @@ def run_workflow(task, store, api, model, *, plan=False, wait=3600, poll=10):
         checkpoint(status="planned")
         return summary(task)
     if task["phase"] == "source":
-        preferences = api.call("GET", "/preferences")
-        if preferences.get("delete_inbox_after_import") is not False:
-            raise AgentError("Disable Inbox cleanup in Settings before an automatic import. No download was queued.")
         # Journal before mutation: a lost response must never cause a duplicate enqueue.
         checkpoint("queuing")
         queue_source(api, task["source"])
@@ -401,13 +408,17 @@ def main(argv=None):
     except (AgentError, OSError) as error:
         # Only controlled AgentError messages may reach the console or task journal.
         message = str(error) if isinstance(error, AgentError) else "Could not read or save local configuration or task state."
+        details = {}
+        if isinstance(error, AgentError) and getattr(error, "reason", None):
+            details["error_code"] = error.reason
+            details["search_attempts"] = error.details
         if task:
-            task.update(status="needs_review", error=message)
+            task.update(status="needs_review", error=message, **details)
             try:
                 store.save(task)
             except (OSError, AgentError):
                 pass
-        print(json.dumps({"error": message, **({"task": task["id"]} if task else {})}), file=sys.stderr)
+        print(json.dumps({"error": message, **details, **({"task": task["id"]} if task else {})}), file=sys.stderr)
         return 1
     finally:
         if model:

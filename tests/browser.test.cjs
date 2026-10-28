@@ -157,6 +157,23 @@ test('themes cover desktop, mobile and login without overflow or browser errors'
  assert.deepEqual(errors,[]);
 });
 
+test('folder cancellation includes nested transfers and preserves siblings and other peers',async()=>{
+ const files=[{id:'cancel-one',filename:'Music/Artist/Album/CD1/1.flac',state:'Queued, Remotely'}, {id:'cancel-two',filename:'Music/Artist/Album/CD2/2.flac',state:'InProgress'}, {id:'keep-done',filename:'Music/Artist/Album/3.flac',state:'Completed, Succeeded'}, {id:'keep-sibling',filename:'Music/Artist/Other/4.flac',state:'Queued, Remotely'}].map(f=>({...f,size:100,bytesTransferred:0}));
+ const transfers=[{username:'Peer',directories:[{files}]},{username:'Other Peer',directories:[{files:[{id:'keep-peer',filename:'Music/Artist/Album/5.flac',state:'Queued, Remotely',size:100}]}]}],cancelled=[];
+ await page.route('**/api/soulseek/downloads',route=>route.fulfill({json:transfers}));
+ await page.route('**/api/soulseek/downloads/*/*',route=>{const id=decodeURIComponent(new URL(route.request().url()).pathname.split('/').at(-1));cancelled.push(id);const file=files.find(f=>f.id===id);if(file)file.state='Completed, Cancelled';return route.fulfill({json:{ok:true}});});
+ try{
+  await page.setViewportSize({width:390,height:844});await page.locator('[data-nav="transfers"]').click();await page.evaluate(()=>loadTransfers(true));
+  await page.locator('#transfer-tree details').evaluateAll(nodes=>nodes.forEach(node=>node.open=true));
+  const button=page.locator('[data-cancel-folder]').filter({hasText:'Cancel folder'});
+  const key=await button.evaluateAll(nodes=>nodes.map(n=>n.dataset.cancelFolder).find(k=>{const p=JSON.parse(k);return p[1]==='Peer'&&p.at(-1)==='Album';}));
+  assert.ok(key);await page.locator('[data-cancel-folder]').filter({visible:true}).evaluateAll((nodes,key)=>nodes.find(n=>n.dataset.cancelFolder===key).setAttribute('data-test-target','cancel-album'),key);
+  await page.locator('[data-test-target="cancel-album"]').click();await page.waitForFunction(()=>!state.cancellingFolders.size);
+  assert.deepEqual(cancelled.sort(),['cancel-one','cancel-two']);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+ }finally{await page.unroute('**/api/soulseek/downloads');await page.unroute('**/api/soulseek/downloads/*/*');await page.setViewportSize({width:1440,height:1000});}
+});
+
 test('tree search and downloads support native expansion, branch downloads, completion notices and cleanup',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  const requested=[];

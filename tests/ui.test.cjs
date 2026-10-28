@@ -57,6 +57,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
       result=scenario.searchResponse?await scenario.searchResponse(id,calls):{search:{id,isComplete:true},responses:scenario.responses||[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
     }
     else if(path.pathname==='/api/soulseek/downloads/completed'){if(scenario.clearFailure){status=502;result={detail:'slskd unavailable'};}else{transfers=transfers.map(u=>({...u,directories:u.directories.map(d=>({...d,files:d.files.filter(f=>!String(f.state).includes('Completed'))}))}));result={ok:true};}}
+    else if(/^\/api\/soulseek\/downloads\/[^/]+\/[^/]+$/.test(path.pathname)&&method==='DELETE') {if(scenario.cancelTransferFailure?.includes(path.pathname.split('/').pop())){status=502;result={detail:'slskd unavailable'};}else{const id=decodeURIComponent(path.pathname.split('/').pop());transfers=transfers.map(u=>({...u,directories:u.directories.map(d=>({...d,files:d.files.map(file=>file.id===id?{...file,state:'Cancelled'}:file)}))}));result={ok:true};}}
     else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:transfers;
     else if(path.pathname==='/api/jobs'){if(method==='DELETE'){const finished=jobs.filter(j=>!['queued','running','ready','applying'].includes(j.status));jobs=jobs.filter(j=>!finished.includes(j));result={cleared:finished.length};}else result=jobs;}
     else if(path.pathname===`/api/jobs/${planId}/cancel`){if(scenario.cancelFailure){status=409;result={detail:'Task already applying'};}else{plan.status='cancelled';plan.result=null;result={ok:true};}}
@@ -632,6 +633,30 @@ test('download tree preserves expanded branches, sorts files and filters without
   assert.equal(f.window.document.querySelectorAll('.transfer-file').length,1);
   assert.match(f.window.document.querySelector('.tree-meta').textContent,/1\/2 downloaded/);
   assert.ok(f.window.document.querySelector('summary progress').value<100);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('cancel folder targets active descendants from the same peer despite filters and reports partial failures',async()=>{
+ const nested=[
+  {...transferFile('a','01.flac'),filename:'Music\\Album\\Disc 1\\01.flac'},
+  {...transferFile('b','02.flac'),filename:'Music\\Album\\Disc 2\\02.flac'},
+  {...transferFile('done','Done.flac','Completed, Succeeded'),filename:'Music\\Album\\Done.flac'},
+  {...transferFile('sibling','Other.flac'),filename:'Music\\Sibling\\Other.flac'},
+ ];
+ const transfers=[...transferData(nested),{username:'Other Peer',directories:[{files:[{...nested[0],id:'other'}]}]}];
+ const f=await fixture(true,null,{}, {transfers,cancelTransferFailure:['b']});
+ try{
+  f.click('[data-nav="transfers"]');await tick();
+  const filter=f.window.document.querySelector('#transfer-filter');filter.value='active';filter.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+  const folder=[...f.window.document.querySelectorAll('[data-cancel-folder]')].find(button=>JSON.parse(button.dataset.cancelFolder).slice(2).includes('Album'));
+  assert.ok(folder);
+  folder.click();await tick();await tick();
+  const cancellations=f.calls.filter(call=>call.method==='DELETE'&&/^\/api\/soulseek\/downloads\//.test(call.path));
+  assert.deepEqual(cancellations.map(call=>call.path.split('/').pop()).sort(),['a','b']);
+  assert.match(f.window.document.querySelector('#toast').textContent,/1 files cancelled\. 1 could not be cancelled/);
+  assert.ok(!f.window.document.querySelector('[data-cancel-folder][disabled]'));
+  assert.equal(f.window.document.querySelectorAll('.transfer-file').length,3);
   assert.deepEqual(f.errors,[]);
  }finally{f.close();}
 });

@@ -1,7 +1,7 @@
 'use strict';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
+const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), cancellingFolders:new Set(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
 Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0,searchReceivedFiles:0,searchFinishWaitStarted:null,searchMode:'standard',searchSubmittedMode:'standard',searchReported:{files:0,replies:0,locked:0},searchStartedAt:null,searchLimitReached:false,searchWaitingSnapshot:false});
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
@@ -446,6 +446,19 @@ function transferProgress(files){
  const bytes=files.reduce((sum,file)=>sum+(transferStatus(file)==='complete'?(file.size||0):Math.min(file.size||0,Math.max(0,file.bytesTransferred||0))),0);
  return total?Math.min(100,bytes/total*100):files.every(file=>transferStatus(file)==='complete')?100:0;
 }
+async function cancelTransferFolder(key){
+ const [scope,username,...path]=JSON.parse(key);
+ if(scope!=='transfers'||state.cancellingFolders.has(key))return;
+ const prefix=[...path];
+ const files=state.transfers.filter(file=>file.username===username&&['queued','active'].includes(transferStatus(file))&&(()=>{const parts=remoteParts(file.filename);parts.pop();return prefix.every((part,index)=>parts[index]===part)&&parts.length>=prefix.length;})());
+ if(!files.length)return;
+ state.cancellingFolders.add(key);if(state.page==='transfers')renderTransfers();
+ let cancelled=0,failed=0;
+ try{
+  for(let i=0;i<files.length;i+=4){const batch=files.slice(i,i+4);const results=await Promise.all(batch.map(async file=>{try{await api(`/soulseek/downloads/${encodeURIComponent(file.username)}/${encodeURIComponent(file.id)}`,{method:'DELETE'});cancelled++;}catch{failed++;}}));void results;}
+  toast(failed?`${cancelled} files cancelled. ${failed} could not be cancelled.`:`${cancelled} files cancelled.` ,failed>0);
+ }finally{state.cancellingFolders.delete(key);await loadTransfers(true);}
+}
 function notifyDownload(message){
  let stack=document.querySelector('#download-notices');if(!stack){stack=document.createElement('div');stack.id='download-notices';stack.setAttribute('aria-live','polite');document.body.append(stack);}
  const item=document.createElement('div');item.className='download-notice';item.innerHTML=`${icon('check')}<span>${esc(message)}</span><button class="quiet icon-button" data-action="dismiss-notice" aria-label="Dismiss notification">${icon('close')}</button>`;stack.append(item);while(stack.children.length>5)stack.firstElementChild.remove();setTimeout(()=>item.remove(),12000);
@@ -507,7 +520,9 @@ function renderTransfers(){
    const status=transferStatus(file),percent=transferProgress([file]);
    return `<div class="tree-file transfer-file" data-transfer-id="${esc(file.id)}">${icon('music')}<span class="tree-label">${esc(basename(file.filename))}<small>${size(file.size)} · <span class="${status==='failed'?'warning-text':''}">${transferLabels[status]}</span>${['active','queued'].includes(status)&&file.placeInQueue?` · queue: ${esc(file.placeInQueue)}`:''}</small></span><div class="tree-progress"><progress aria-label="${esc(basename(file.filename))} progress" max="100" value="${percent}"></progress><small>${percent.toFixed(0)}%${status==='active'&&file.averageSpeed?` · ${size(file.averageSpeed)}/s`:''}</small></div>${['queued','active'].includes(status)?`<button class="small quiet" data-cancel-user="${esc(file.username)}" data-cancel-id="${esc(file.id)}">Cancel</button>`:`<span class="badge${status==='failed'?' warm':''}">${transferLabels[status]}</span>`}</div>`;
   }).join('');
-  return treeBranch('transfers',node,depth,body,`<span class="tree-progress"><progress aria-label="${esc(node.name)} progress" max="100" value="${progress}"></progress><small>${progress.toFixed(0)}%</small></span>`,`${done}/${node.files.length} downloaded${failed?` · ${failed} failed / cancelled`:''} · ${size(node.files.reduce((n,f)=>n+(f.size||0),0))}`);
+  const active=node.files.filter(f=>['queued','active'].includes(transferStatus(f)));
+  const key=treeKey('transfers',node),cancel=active.length&&!node.user?`<button class="small quiet" data-cancel-folder="${esc(key)}" ${state.cancellingFolders.has(key)?'disabled':''}>${state.cancellingFolders.has(key)?'Cancelling…':'Cancel folder'}</button>`:'';
+  return treeBranch('transfers',node,depth,body,`${cancel}<span class="tree-progress"><progress aria-label="${esc(node.name)} progress" max="100" value="${progress}"></progress><small>${progress.toFixed(0)}%</small></span>`,`${done}/${node.files.length} downloaded${failed?` · ${failed} failed / cancelled`:''} · ${size(node.files.reduce((n,f)=>n+(f.size||0),0))}`);
  };
  document.querySelector('#transfer-tree').innerHTML=all.length?`<div class="remote-tree" data-tree-scope="transfers">${remoteTree(all).sort(transferNodeCompare).map(n=>render(n,0)).join('')||'<div class="empty"><h3>No downloads in this filter</h3></div>'}</div>`:`<div class="empty">${icon('download')}<h3>No downloads</h3><p>Download music from Soulseek to see it here.</p><button class="primary" data-nav="soulseek">Search music ${icon('arrow')}</button></div>`;
 }
@@ -776,6 +791,7 @@ document.addEventListener('click',async event=>{
   if(button.dataset.downloadTree){event.preventDefault();button.disabled=true;const node=state.searchNodes.get(button.dataset.downloadTree);if(node)await downloadFiles(node,node.files);return;}
   if(button.dataset.downloadFile){event.preventDefault();button.disabled=true;const [g,f]=button.dataset.downloadFile.split(':').map(Number);await downloadFiles(state.groups[g],[state.groups[g].files[f]]);return;}
   if(button.dataset.cancelId){button.disabled=true;await api(`/soulseek/downloads/${encodeURIComponent(button.dataset.cancelUser)}/${button.dataset.cancelId}`,{method:'DELETE'});await loadTransfers(true);return;}
+  if(button.dataset.cancelFolder){await cancelTransferFolder(button.dataset.cancelFolder);return;}
   if(button.hasAttribute('data-manual-back')){manualImportDialog(button.dataset.manualBack,button.dataset.manualTarget);return;}
   if(button.hasAttribute('data-match-again')){matchDialog(button.dataset.matchAgain,false);return;}
   if(button.dataset.release){button.disabled=true;await makePreview(button.dataset.release);return;}
