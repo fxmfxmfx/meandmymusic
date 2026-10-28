@@ -37,6 +37,11 @@ another music server.
   filters use filename extensions; M4A is separate because its codec is unknown.
 - Search updates arrive without overlapping polls or rebuilding unchanged trees.
   Stop keeps the results already found; an interrupted request can be retried.
+- Choose Standard or Extended Soulseek search. Extended waits longer for replies
+  and accepts more results; it does not guarantee a complete catalog. Progress
+  shows reported files and replies while the file list is being collected.
+- Search summaries count audio and other files separately. Use Audio files to
+  hide artwork and archives, or Clear filters to restore the complete result list.
 - Sort downloads by time, name, status, progress or size; filter active, successful
   or failed transfers. Clear finished records without deleting downloaded files.
 - Receive in-app notices when a file or selected folder finishes downloading,
@@ -279,6 +284,21 @@ export MMM_URL=http://localhost:8080
 bin/mmm status
 bin/mmm ls --root inbox
 ```
+
+With Compose, the CLI can run inside manager using its existing dependencies and
+server password, without installing Python packages on the host:
+
+```sh
+docker compose exec -T manager python -m app.cli \
+  --password-env APP_PASSWORD status
+docker compose exec -T manager python -m app.cli \
+  --password-env APP_PASSWORD search "Arvo Part Alina" --extended
+```
+
+After starting a search, the CLI collects results for up to 60 seconds by default.
+Use `--wait 0` to return a search ID immediately or `--wait 120` to collect results
+for longer. A search may continue
+after the CLI wait ends; use `results SEARCH_UUID` to fetch its current snapshot.
 
 API sessions use `POST /api/login` and the returned cookie. Mutating requests
 require `X-Requested-With: meandmymusic`. Errors return `detail`; connection errors

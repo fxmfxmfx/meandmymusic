@@ -51,6 +51,7 @@ class Move(BaseModel):
 
 class Search(BaseModel):
     query: str = Field(max_length=300)
+    mode: Literal["standard", "extended"] = "standard"
 
 
 class DownloadFile(BaseModel):
@@ -489,7 +490,10 @@ def create_app(settings=None):
         query = data.query.strip()
         if len(query) < 2:
             raise HTTPException(400, "Search query must contain at least 2 characters")
-        return await soulseek.request("POST", "/searches", {"searchText": query, "fileLimit": 3000, "responseLimit": 100})
+        payload = {"searchText": query, "fileLimit": 3000, "responseLimit": 100}
+        if data.mode == "extended":
+            payload.update({"searchTimeout": 30, "fileLimit": 10000, "responseLimit": 250})
+        return await soulseek.request("POST", "/searches", payload)
 
     @app.get("/api/soulseek/searches/{search_id}")
     async def search_results(search_id: UUID, since: str | None = Query(default=None, max_length=64)):

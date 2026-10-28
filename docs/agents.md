@@ -15,7 +15,7 @@ filesystem access or SSH to the music server. Configure `MMM_URL` and
 | `ls [PATH] --root library\|inbox` | List files and directories |
 | `mkdir PATH --root ...` | Create a folder |
 | `mv SOURCE DESTINATION --root ...` | Move or rename within a section |
-| `search QUERY --wait 20` | Search Soulseek and collect results |
+| `search QUERY [--extended] [--wait 60]` | Search Soulseek and collect results |
 | `results SEARCH_UUID` | Read search status/results |
 | `download --user USER --files FILE.json` | Queue explicitly selected files |
 | `downloads` | Download queue |
@@ -46,6 +46,14 @@ If `search.fileCount` exceeds the number of files received, fetch again without
 `since` before declaring the results complete. The browser waits up to ten
 additional seconds for publication, then offers Retry while keeping any files
 already received.
+
+`POST /api/soulseek/searches` accepts an optional `mode`: `standard` (default)
+uses 3,000 files and 100 replies; `extended` uses 10,000 files, 250 replies and a
+30-second quiet period after the last reply. Reaching either result limit can
+end a search earlier. These are collection limits, not a guarantee of exhaustive
+coverage. The CLI's `--extended` flag selects this mode. Its default wait is 60
+seconds after search creation; waiting can end before the network search does. The CLI waits for
+reported files to arrive before treating a terminal status as a complete snapshot.
 
 ## Download/import workflow
 

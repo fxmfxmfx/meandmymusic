@@ -36,7 +36,8 @@ def parser():
     mv.add_argument("--root", choices=["library", "inbox"], default="library")
     search = sub.add_parser("search", help="Start a Soulseek search and collect results")
     search.add_argument("query")
-    search.add_argument("--wait", type=int, default=20, help="Wait at most this many seconds (0–120)")
+    search.add_argument("--wait", type=int, default=60, help="Collect results for this many seconds after search starts (0–120)")
+    search.add_argument("--extended", action="store_true", help="Use extended Soulseek search limits")
     results = sub.add_parser("results")
     results.add_argument("search_id")
     download = sub.add_parser("download", help="Queue selected files from an explicit JSON manifest")
@@ -73,8 +74,11 @@ def parser():
 
 
 def execute(args, client):
-    def call(method, path, data=None, params=None):
-        response = client.request(method, "/api" + path, json=data, params=params)
+    def call(method, path, data=None, params=None, timeout=None):
+        request_options = {"json": data, "params": params}
+        if timeout is not None:
+            request_options["timeout"] = timeout
+        response = client.request(method, "/api" + path, **request_options)
         result = response.json()
         if response.is_error:
             raise RuntimeError(result.get("detail", f"HTTP {response.status_code}"))
@@ -129,14 +133,39 @@ def execute(args, client):
     if c == "search":
         if not 0 <= args.wait <= 120:
             raise RuntimeError("--wait must be between 0 and 120 seconds")
-        search = call("POST", "/soulseek/searches", {"query": args.query})
+        payload = {"query": args.query}
+        if args.extended:
+            payload["mode"] = "extended"
+        search = call("POST", "/soulseek/searches", payload)
         deadline = time.monotonic() + args.wait
         result = {"search": search, "responses": []}
-        while time.monotonic() < deadline:
-            result = call("GET", f"/soulseek/searches/{search['id']}")
-            if result["search"].get("isComplete"):
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
                 break
-            time.sleep(2)
+            try:
+                result = call("GET", f"/soulseek/searches/{search['id']}", timeout=remaining)
+            except httpx.TimeoutException:
+                break
+            status = result["search"]
+            received = sum(
+                len(response.get("files", []))
+                for response in (result.get("responses") or [])
+                if isinstance(response, dict) and isinstance(response.get("files"), list)
+            )
+            expected = status.get("fileCount")
+            waiting_for_files = type(expected) is int and expected >= 0 and expected > received
+            terminal = any(
+                flag.strip().casefold() in {"completed", "timedout", "cancelled", "errored"}
+                for value in (status.get("state"), status.get("status"))
+                if isinstance(value, str)
+                for flag in value.split(",")
+            )
+            if (status.get("isComplete") is True or terminal) and not waiting_for_files:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining > 0:
+                time.sleep(min(2, remaining))
         return result
     if c == "results":
         return call("GET", f"/soulseek/searches/{args.search_id}")

@@ -203,6 +203,30 @@ test('tree search and downloads support native expansion, branch downloads, comp
  assert.deepEqual(errors,[]);
 });
 
+test('native Soulseek form submits extended mode and renders live progress controls',async()=>{
+ const starts=[];
+ await page.route('**/api/soulseek/searches',async route=>{
+  if(route.request().method()==='POST')starts.push(route.request().postDataJSON());
+  await route.fulfill({json:{id:'extended-browser-search'}});
+ });
+ await page.route('**/api/soulseek/searches/extended-browser-search',route=>route.fulfill({json:{search:{state:'InProgress',isComplete:false,fileCount:32,responseCount:4},responses:[]}}));
+ try{
+  await page.reload();await page.locator('[data-nav="soulseek"]').click();
+  await page.locator('#soulseek-mode').selectOption('extended');
+  await page.locator('#soulseek-query').fill('Test Artist Album');
+  await page.locator('#soulseek-query').press('Enter');
+  await page.locator('#search-status').getByText(/32 files reported/i).waitFor();
+  assert.deepEqual(starts,[{query:'Test Artist Album',mode:'extended'}]);
+  assert.match(await page.locator('#search-status').textContent(),/4 replies/i);
+  assert.match(await page.locator('#search-results').textContent(),/Collecting results/i);
+  assert.equal(await page.locator('#search-format option[value="audio"]').count(),1);
+  assert.equal(await page.locator('[data-action="clear-search-filters"]').count(),1);
+  assert.deepEqual(errors,[]);
+ }finally{
+  await page.unroute('**/api/soulseek/searches');await page.unroute('**/api/soulseek/searches/extended-browser-search');
+ }
+});
+
 test('Soulseek search filters, revision polling, stop and filtered nested downloads work in the browser',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  const searchId='fixture-search-1', puts=[],gets=[],downloads=[];

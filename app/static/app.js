@@ -2,7 +2,7 @@
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
-Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0,searchReceivedFiles:0,searchFinishWaitStarted:null});
+Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0,searchReceivedFiles:0,searchFinishWaitStarted:null,searchMode:'standard',searchSubmittedMode:'standard',searchReported:{files:0,replies:0,locked:0},searchStartedAt:null,searchLimitReached:false,searchWaitingSnapshot:false});
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -255,7 +255,7 @@ function fileDialog(mode){
 }
 function renderSoulseek(){
  rememberTree('search');
- document.querySelector('#content').innerHTML=heading('03','Soulseek','',`<span class="status-pill" id="slskd-status"></span>`)+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><button class="primary" type="submit" ${state.searchPhase==='starting'?'disabled':''}>${icon('search')}${state.searchPhase==='starting'?'Starting…':'Search'}</button><button type="button" data-action="stop-search" ${['starting','searching'].includes(state.searchPhase)?'':'hidden'}>Stop</button></form><p class="search-help">Results arrive as users respond. Search with artist and album names for more specific results.</p></section><section class="search-tools list-toolbar" aria-label="Filter search results" ${state.searchId?'':'hidden'}><label>Filter results<input id="search-filter" type="search" placeholder="File, folder or user" value="${esc(state.searchFilter)}"></label><label>Format<select id="search-format">${['all','lossless','flac','mp3','m4a','aac','ogg','opus','wav','aiff','alac','ape','wv','other'].map(value=>`<option value="${value}" ${state.searchFormat===value?'selected':''}>${value==='all'?'All formats':value==='lossless'?'Lossless':value==='other'?'Other files':value.toUpperCase()}</option>`).join('')}</select></label><label>Sort users by<select id="search-sort">${[['speed','Available, then fastest'],['queue','Shortest queue'],['name','Username'],['files','Most files'],['size','Largest size']].map(([value,label])=>`<option value="${value}" ${state.searchSort===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="search-slot-label"><input id="search-slots" type="checkbox" ${state.searchSlots?'checked':''}>Free slots only</label></section><div id="search-status" role="status" aria-live="polite"></div><div id="search-results"></div>`;
+ document.querySelector('#content').innerHTML=heading('03','Soulseek','',`<span class="status-pill" id="slskd-status"></span>`)+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><label class="search-mode-control"><span class="visually-hidden">Search mode</span><select id="soulseek-mode" name="mode" aria-label="Search mode"><option value="standard" ${state.searchMode==='standard'?'selected':''}>Standard</option><option value="extended" ${state.searchMode==='extended'?'selected':''}>Extended</option></select></label><button class="primary" type="submit" ${state.searchPhase==='starting'?'disabled':''}>${icon('search')}${state.searchPhase==='starting'?'Starting…':'Search'}</button><button type="button" data-action="stop-search" ${['starting','searching'].includes(state.searchPhase)?'':'hidden'}>Stop</button></form><p class="search-help" id="soulseek-help">${searchModeHelp()}</p></section><section class="search-tools list-toolbar" aria-label="Filter search results" ${state.searchId?'':'hidden'}><label>Filter results<input id="search-filter" type="search" placeholder="File, folder or user" value="${esc(state.searchFilter)}"></label><label>Format<select id="search-format">${['all','audio','lossless','flac','mp3','m4a','aac','ogg','opus','wav','aiff','alac','ape','wv','other'].map(value=>`<option value="${value}" ${state.searchFormat===value?'selected':''}>${value==='all'?'All formats':value==='audio'?'Audio files':value==='lossless'?'Lossless':value==='other'?'Other files':value.toUpperCase()}</option>`).join('')}</select></label><label>Sort users by<select id="search-sort">${[['speed','Available, then fastest'],['queue','Shortest queue'],['name','Username'],['files','Most files'],['size','Largest size']].map(([value,label])=>`<option value="${value}" ${state.searchSort===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="search-slot-label"><input id="search-slots" type="checkbox" ${state.searchSlots?'checked':''}>Free slots only</label><button class="small quiet" data-action="clear-search-filters" ${hasSearchFilters()?'':'hidden'}>Clear filters</button></section><div id="search-status" role="status" aria-live="polite"></div><div id="search-results"></div>`;
  updateStatus();renderSearchResults();
 }
 function normalizeResults(responses){
@@ -311,27 +311,34 @@ function searchFiles(){
   return group.files.flatMap((file,f)=>{
    const format=remoteFormat(file),text=`${group.username} ${file.filename}`.toLowerCase();
    if(!terms.every(term=>text.includes(term)))return [];
-   if(state.searchFormat==='lossless'?!losslessFormats.has(format):state.searchFormat==='other'?searchFormats.has(format):state.searchFormat!=='all'&&state.searchFormat!==format)return [];
+   if(state.searchFormat==='audio'?!searchFormats.has(format):state.searchFormat==='lossless'?!losslessFormats.has(format):state.searchFormat==='other'?searchFormats.has(format):state.searchFormat!=='all'&&state.searchFormat!==format)return [];
    return [{...file,username:group.username,group:g,index:f}];
   });
  });
 }
-function searchCount(n,label){return `${n} ${label}${n===1?'':'s'}`;}
+function searchCount(n,label){return `${n} ${n===1?label:label==='reply'?'replies':label+'s'}`;}
+function hasSearchFilters(){return Boolean(state.searchFilter.trim()||state.searchFormat!=='all'||state.searchSlots);}
+function searchModeHelp(){return state.searchMode==='extended'?'Waits longer for replies and accepts more results.':'Results appear when replies have been collected.';}
 function renderSearchStatus(){
  const el=document.querySelector('#search-status');if(!el)return;
- const labels={starting:'Starting search…',searching:'Searching…',complete:'Search complete',stopped:'Stopped',error:'Search interrupted'};
- const text=labels[state.searchPhase]||'';
- const counts=state.searchId?`${searchCount(state.groups.reduce((n,g)=>n+g.files.length,0),'file')} · ${searchCount(state.groups.length,'folder')} · ${searchCount(new Set(state.groups.map(g=>g.username)).size,'user')}`:'';
- const polling=['starting','searching'].includes(state.searchPhase);
- el.innerHTML=(text||counts)?`<div class="search-summary">${polling?'<span class="spinner"></span>':''}<strong>${text}</strong>${counts?`<span>${counts}</span>`:''}</div>${state.searchError?`<div class="error-box"><p>${esc(state.searchError)}</p><button data-action="retry-search">${icon('refresh')}Retry</button></div>`:''}`:'';
+ const labels={starting:'Starting search…',searching:state.searchWaitingSnapshot?'Loading results…':'Searching…',complete:'Search complete',stopped:'Stopped',error:'Search interrupted'};
+ const text=labels[state.searchPhase]||'',polling=['starting','searching'].includes(state.searchPhase);
+ const all=state.groups.flatMap(group=>group.files),audio=all.filter(file=>searchFormats.has(remoteFormat(file))).length;
+ const reported=state.searchReported||{files:0,replies:0,locked:0};
+ const counts=state.searchId?polling&&reported.files>all.length?`${reported.files} files reported · ${searchCount(reported.replies,'reply')}`:`${searchCount(audio,'audio file')} · ${searchCount(all.length-audio,'other file')} · ${searchCount(new Set(state.groups.map(g=>g.username)).size,'user')}`:'';
+ const elapsed=polling&&state.searchStartedAt!=null?`${Math.max(0,Math.floor((Date.now()-state.searchStartedAt)/1000))}s elapsed`:'';
+ const locked=reported.locked?`${searchCount(reported.locked,'locked file')} unavailable`:'';
+ const limit=state.searchLimitReached?`<p class="search-limit-warning">Result limit reached. ${state.searchSubmittedMode==='extended'?'Try a more specific query.':'Try Extended or a more specific query.'}</p>`:'';
+ el.innerHTML=(text||counts)?`<div class="search-summary">${polling?'<span class="spinner"></span>':''}<strong>${text}</strong>${counts?`<span>${counts}</span>`:''}${elapsed?`<span class="search-elapsed">${elapsed}</span>`:''}</div>${locked?`<p class="search-visible">${locked}</p>`:''}${limit}${state.searchError?`<div class="error-box"><p>${esc(state.searchError)}</p><button data-action="retry-search">${icon('refresh')}Retry</button></div>`:''}`:'';
  const stop=document.querySelector('[data-action="stop-search"]');if(stop)stop.hidden=!polling;
+ const clear=document.querySelector('[data-action="clear-search-filters"]');if(clear)clear.hidden=!hasSearchFilters();
 }
 function renderSearchResults(){
  const el=document.querySelector('#search-results');if(!el)return;
  renderSearchStatus();
  if(!state.searchId){el.innerHTML=state.searchPhase==='starting'?'<div class="loading">Waiting for search results…</div>':`<div class="empty">${icon('search')}<h3>Search for music</h3><p>Enter an artist, album or track name.</p></div>`;return;}
  // Empty placeholders depend on completion even when no new files arrive.
- const emptyPhase=state.groups.length?'':state.searchPhase==='error'?'error':state.searchDone?'done':'waiting';
+ const emptyPhase=state.groups.length?'':state.searchPhase==='error'?'error':state.searchDone?'done':state.searchReported?.files>0?'collecting':'waiting';
  const signature=JSON.stringify([state.searchVersion,state.searchFilter,state.searchFormat,state.searchSlots,state.searchSort,state.searchLimit,emptyPhase]);
  // Unchanged polls must preserve native details, focus and in-progress clicks.
  if(state.searchRenderedElement===el&&state.searchRenderedSignature===signature)return;
@@ -351,7 +358,7 @@ function renderSearchResults(){
   const meta=`${searchCount(node.files.length,'file')} · ${size(node.files.reduce((sum,f)=>sum+(Number(f.size)||0),0))}<small>${esc(node.user?`${availability}${peer.speed?` · ${size(peer.speed)}/s`:''}`:formats)}</small>`;
   return treeBranch('search',node,depth,body,`<button class="small primary" data-download-tree="${nodeId}" aria-label="Download ${node.user?'all results from':'folder'} ${esc(node.name)}">${icon('download')}<span>${node.user?'Download all':'Download folder'}</span></button>`,meta);
  };
- el.innerHTML=`<p class="search-visible">${searchCount(files.length,'matching file')} · ${searchCount(users.length,'user')}${users.length>state.searchLimit?` · showing ${state.searchLimit}`:''}${state.searchFilter||state.searchFormat!=='all'||state.searchSlots?' · Folder downloads include filtered files only.':''}</p>`+(users.length?`<div class="remote-tree" data-tree-scope="search">${users.slice(0,state.searchLimit).map(n=>render(n,0)).join('')}</div>${users.length>state.searchLimit?'<button class="search-more" data-action="more-search-results">Show more users</button>':''}`:`<div class="empty"><h3>${state.groups.length?'No results in this filter':emptyPhase==='error'?'Results unavailable':state.searchDone?'No results':'Waiting for results…'}</h3><p>${state.groups.length?'Change the filters to see more files.':emptyPhase==='error'?'Retry to refresh this search.':state.searchDone?'Try fewer search terms or check your Soulseek connection.':'Users may take a few seconds to respond.'}</p></div>`);
+ el.innerHTML=`<p class="search-visible">${searchCount(files.length,'matching file')} · ${searchCount(users.length,'user')}${users.length>state.searchLimit?` · showing ${state.searchLimit}`:''}${state.searchFilter||state.searchFormat!=='all'||state.searchSlots?' · Folder downloads include filtered files only.':''}</p>`+(users.length?`<div class="remote-tree" data-tree-scope="search">${users.slice(0,state.searchLimit).map(n=>render(n,0)).join('')}</div>${users.length>state.searchLimit?'<button class="search-more" data-action="more-search-results">Show more users</button>':''}`:`<div class="empty"><h3>${state.groups.length?'No results in this filter':emptyPhase==='error'?'Results unavailable':state.searchDone?'No results':emptyPhase==='collecting'?'Collecting results…':'Waiting for results…'}</h3><p>${state.groups.length?'Change the filters to see more files.':emptyPhase==='error'?'Retry to refresh this search.':state.searchDone?'Try fewer search terms or check your Soulseek connection.':emptyPhase==='collecting'?'Replies are arriving. The file list will appear when the search finishes.':'Users may take a few seconds to respond.'}</p></div>`);
 }
 function invalidateSearch(){clearTimeout(state.searchTimer);state.searchTimer=null;state.searchEpoch++;state.searchRequest=null;}
 async function pollSearch(){
@@ -367,10 +374,14 @@ async function pollSearch(){
   }
   state.searchRevision=data.revision??null;
   const status=String(data.search.state||'');
+  const count=value=>Number.isInteger(value)&&value>=0?value:0;
+  state.searchReported={files:count(data.search.fileCount),replies:count(data.search.responseCount),locked:count(data.search.lockedFileCount)};
+  state.searchLimitReached=/ResponseLimitReached|FileLimitReached/i.test(status);
   state.searchDone=data.search.isComplete===true||/Completed|Cancelled|TimedOut|Errored/i.test(status);
   state.searchFailedTerminal=/Errored/i.test(status);
   // slskd can publish completion and counters before saving its response list.
   const awaitingResults=state.searchDone&&!/Cancelled|Errored/i.test(status)&&Number.isInteger(data.search.fileCount)&&data.search.fileCount>state.searchReceivedFiles;
+  state.searchWaitingSnapshot=awaitingResults;
   if(awaitingResults){
    state.searchFinishWaitStarted??=Date.now();state.searchRevision=null;
    if(Date.now()-state.searchFinishWaitStarted>=10000)throw new Error('Search results are still being prepared. Retry to refresh them.');
@@ -390,16 +401,17 @@ async function pollSearch(){
 async function discardSearch(id){
  try{await api(`/soulseek/searches/${id}`,{method:'PUT'});await api(`/soulseek/searches/${id}`,{method:'DELETE'});}catch{}
 }
-async function startSearch(value){
+async function startSearch(value,mode=state.searchMode){
  const text=String(value).trim();if(text.length<2||text.length>300)throw new Error('Enter between 2 and 300 characters');
+ if(!['standard','extended'].includes(mode))throw new Error('Choose a search mode');
  const oldId=state.searchId,oldActive=oldId&&!state.searchDone;invalidateSearch();const epoch=state.searchEpoch;
- state.searchQuery=text;state.searchId=null;state.groups=[];state.searchDone=false;state.searchPhase='starting';state.searchError=null;state.searchFailedTerminal=false;state.searchRevision=null;state.searchSnapshot=null;state.searchVersion++;state.searchLimit=25;state.searchReceivedFiles=0;state.searchFinishWaitStarted=null;
+ state.searchQuery=text;state.searchId=null;state.groups=[];state.searchDone=false;state.searchPhase='starting';state.searchError=null;state.searchFailedTerminal=false;state.searchRevision=null;state.searchSnapshot=null;state.searchVersion++;state.searchLimit=25;state.searchReceivedFiles=0;state.searchFinishWaitStarted=null;state.searchMode=mode;state.searchSubmittedMode=mode;state.searchReported={files:0,replies:0,locked:0};state.searchStartedAt=Date.now();state.searchLimitReached=false;state.searchWaitingSnapshot=false;state.searchFilter='';
  for(const key of state.treeOpen.keys())if(key.startsWith('["search",'))state.treeOpen.delete(key);
  if(state.page==='soulseek')renderSoulseek();
  // Releasing the previous search must not delay the next network search.
  if(oldActive)discardSearch(oldId);
  try{
-  const result=await api('/soulseek/searches',{method:'POST',body:{query:text}});
+  const result=await api('/soulseek/searches',{method:'POST',body:{query:text,...(mode==='extended'?{mode}: {})}});
   if(epoch!==state.searchEpoch){if(result.id)discardSearch(result.id);return;}
   if(!result.id)throw new Error('slskd did not return a search ID');
   state.searchId=result.id;state.searchPhase='searching';if(state.page==='soulseek')renderSoulseek();await pollSearch();
@@ -739,6 +751,7 @@ document.addEventListener('drop',async event=>{
 });
 document.addEventListener('dragend',()=>{if(state.drag)finishDrag();});
 document.addEventListener('change',async event=>{
+ if(event.target.id==='soulseek-mode'){state.searchMode=event.target.value;const help=document.querySelector('#soulseek-help');if(help)help.textContent=searchModeHelp();}
  if(['search-format','search-sort','search-slots'].includes(event.target.id)){if(event.target.id==='search-format')state.searchFormat=event.target.value;else if(event.target.id==='search-sort')state.searchSort=event.target.value;else state.searchSlots=event.target.checked;state.searchLimit=25;renderSearchResults();}
  if(event.target.matches('#upload-files-input,#upload-folder-input')){const files=[...event.target.files].map(file=>({file,path:file.webkitRelativePath||file.name}));event.target.value='';await startUpload(files,[]);return;}
  if(event.target.id==='delete-inbox-after-import'){state.preferenceEdited=true;const input=event.target,old=state.preferences.delete_inbox_after_import;input.disabled=true;try{state.preferences=await api('/preferences',{method:'PATCH',body:{delete_inbox_after_import:input.checked}});toast(state.preferences.delete_inbox_after_import?'Inbox cleanup enabled. New previews will show the deletion.':'Inbox cleanup disabled.');}catch(error){input.checked=old;toast(error.message,true);}finally{input.disabled=false;}return;}
@@ -803,6 +816,7 @@ document.addEventListener('click',async event=>{
   else if(action==='soulseek-reconnect'){button.disabled=true;state.accountBusy=true;try{await api('/soulseek/auth/reconnect',{method:'POST'});}finally{state.accountBusy=false;await refreshAccount();}}
   else if(action==='stop-search')await stopSearch();
   else if(action==='retry-search'){if(state.searchId&&!state.searchFailedTerminal){invalidateSearch();state.searchDone=false;state.searchError=null;state.searchPhase='searching';state.searchFinishWaitStarted=null;renderSearchStatus();await pollSearch();}else await startSearch(state.searchQuery);}
+  else if(action==='clear-search-filters'){clearTimeout(state.searchFilterTimer);state.searchFilter='';state.searchFormat='all';state.searchSlots=false;state.searchLimit=25;document.querySelector('#search-filter').value='';document.querySelector('#search-format').value='all';document.querySelector('#search-slots').checked=false;renderSearchResults();}
   else if(action==='more-search-results'){state.searchLimit+=25;renderSearchResults();}
  }catch(error){toast(error.message,true);}finally{if(button.isConnected)button.disabled=false;}
 });
@@ -827,7 +841,7 @@ document.addEventListener('submit',async event=>{
    modal.close();state.selected=null;await loadFiles();toast('Done.');
   }
   else if(form.id==='soulseek-form'){
-   await startSearch(values.get('query'));
+   await startSearch(values.get('query'),values.get('mode')||state.searchMode);
   }
   else if(form.id==='release-form')await searchReleases(String(values.get('artist')).trim(),String(values.get('album')).trim());
   else if(form.id==='mbid-form'){const match=String(values.get('mbid')).match(/(?:^|release\/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:$|[?#/])/i);if(!match)throw new Error('Enter a valid release MBID or MusicBrainz release URL');await makePreview(match[1]);}
