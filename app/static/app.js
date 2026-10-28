@@ -319,7 +319,7 @@ function searchFiles(){
 function searchCount(n,label){return `${n} ${label}${n===1?'':'s'}`;}
 function renderSearchStatus(){
  const el=document.querySelector('#search-status');if(!el)return;
- const labels={starting:'Starting search…',searching:'Searching…',complete:'Search complete',timeout:'Search time limit reached',stopped:'Stopped',error:'Search interrupted'};
+ const labels={starting:'Starting search…',searching:'Searching…',complete:'Search complete',stopped:'Stopped',error:'Search interrupted'};
  const text=labels[state.searchPhase]||'';
  const counts=state.searchId?`${searchCount(state.groups.reduce((n,g)=>n+g.files.length,0),'file')} · ${searchCount(state.groups.length,'folder')} · ${searchCount(new Set(state.groups.map(g=>g.username)).size,'user')}`:'';
  const polling=['starting','searching'].includes(state.searchPhase);
@@ -364,7 +364,7 @@ async function pollSearch(){
   const status=String(data.search.state||'');
   state.searchDone=data.search.isComplete===true||/Completed|Cancelled|TimedOut|Errored/i.test(status);
   state.searchFailedTerminal=/Errored/i.test(status);
-  state.searchPhase=state.searchFailedTerminal?'error':/Cancelled/i.test(status)?'stopped':/TimedOut/i.test(status)?'timeout':state.searchDone?'complete':'searching';
+  state.searchPhase=state.searchFailedTerminal?'error':/Cancelled/i.test(status)?'stopped':state.searchDone?'complete':'searching';
   state.searchError=state.searchFailedTerminal?'The remote search ended with an error. Retry to start a new search. Results found so far are kept.':null;
   if(state.page==='soulseek')renderSearchResults();
  }catch(error){

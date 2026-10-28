@@ -432,10 +432,10 @@ test('a failed old search response cannot replace results for a newer query',asy
  }finally{f.close();}
 });
 
-test('slskd terminal search states distinguish cancellation, deadline and error',async()=>{
+test('slskd search deadline completes normally while cancellation and errors stay distinct',async()=>{
  for(const [remoteState,expected] of [
   ['Completed, Cancelled','Stopped'],
-  ['Completed, TimedOut','Search time limit reached'],
+  ['Completed, TimedOut','Search complete'],
   ['Completed, Errored','Search interrupted']
  ]){
   const f=await fixture(true,null,{}, {searchResponse:async(id)=>({search:{id,state:remoteState,errorMessage:'peer connection dropped'},responses:[]})});
