@@ -1,0 +1,23 @@
+[Unit]
+Description=Local music AI model server
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=music-llm
+Group=music-llm
+WorkingDirectory=/var/lib/music-llm
+ExecStart=/llama.cpp/build/bin/llama-server --host 127.0.0.1 --port 8081 --model /var/lib/music-llm/model.gguf --ctx-size 8192 --parallel 1 --threads 4 --threads-batch 4 --batch-size 512 --ubatch-size 128 --jinja --reasoning off --reasoning-budget 0 --no-webui
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/llama.cpp /var/lib/music-llm/model.gguf
+MemoryMax=9G
+
+[Install]
+WantedBy=multi-user.target

@@ -77,6 +77,8 @@ an actual target album and edition; a new reissue is not necessarily a new album
    destination. Navidrome sees the changes on its next scan.
 
 These are separate commands, not a built-in autonomous agent or scheduler.
+The optional [local music assistant](music-ai.md) coordinates them through the
+same HTTP API using llama.cpp and a resumable workflow with import checks.
 
 ## API details
 

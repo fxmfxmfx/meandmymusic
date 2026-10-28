@@ -272,6 +272,8 @@ Inbox uploads can be matched and imported as usual.
 ## CLI and API
 
 See [docs/agents.md](docs/agents.md) for commands and a download/import workflow.
+For the optional local-model assistant using llama.cpp, see
+[docs/music-ai.md](docs/music-ai.md).
 Contributors and coding agents should read [AGENTS.md](AGENTS.md).
 
 The CLI uses the same authenticated API as the UI:
