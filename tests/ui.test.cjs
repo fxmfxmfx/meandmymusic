@@ -50,8 +50,12 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     else if(path.pathname==='/api/metadata') result={title:'Song',artist:'Test Artist',duration:61,bitrate:320};
     else if(path.pathname==='/api/folders') {entries.push(folder(body.path));result={ok:true};}
     else if(path.pathname==='/api/move') {entries=entries.map(entry=>entry.path===body.source?{...entry,path:body.destination,name:body.destination}:entry);result={ok:true};}
-    else if(path.pathname==='/api/soulseek/searches'&&method==='POST') result={id:search};
-    else if(path.pathname===`/api/soulseek/searches/${search}`) result={search:{id:search,isComplete:true},responses:scenario.responses||[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
+    else if(path.pathname==='/api/soulseek/searches'&&method==='POST') result=scenario.searchStart?await scenario.searchStart(body,calls):{id:search};
+    else if(path.pathname.startsWith('/api/soulseek/searches/')&&['DELETE','PUT'].includes(method)) result={ok:true};
+    else if(path.pathname.startsWith('/api/soulseek/searches/')) {
+      const id=path.pathname.split('/').pop();
+      result=scenario.searchResponse?await scenario.searchResponse(id,calls):{search:{id,isComplete:true},responses:scenario.responses||[{username:'Peer',hasFreeUploadSlot:true,uploadSpeed:1024,files:[{filename:'Music\\Album\\01.flac',size:123456,bitRate:900}]}]};
+    }
     else if(path.pathname==='/api/soulseek/downloads/completed'){if(scenario.clearFailure){status=502;result={detail:'slskd unavailable'};}else{transfers=transfers.map(u=>({...u,directories:u.directories.map(d=>({...d,files:d.files.filter(f=>!String(f.state).includes('Completed'))}))}));result={ok:true};}}
     else if(path.pathname==='/api/soulseek/downloads') result=method==='POST'?{ok:true}:transfers;
     else if(path.pathname==='/api/jobs'){if(method==='DELETE'){const finished=jobs.filter(j=>!['queued','running','ready','applying'].includes(j.status));jobs=jobs.filter(j=>!finished.includes(j));result={cleared:finished.length};}else result=jobs;}
@@ -311,6 +315,168 @@ test('search tree keeps peers separate and downloads a parent branch with nested
   assert.equal(f.window.document.querySelectorAll('.download-notice').length,1);
   f.click('[data-nav="library"]');await tick();assert.ok(!f.window.document.querySelector('#slskd-status'));
   assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('Soulseek results expose filters and ranking controls and keep original remote paths',async()=>{
+ const files=[
+  {filename:'Music\\Artist\\Album\\CD1\\01.flac',size:1000,bitRate:900,isVariableBitRate:true,bitDepth:24,sampleRate:96000,length:125},
+  {filename:'Music\\Artist\\Album\\CD1\\01.flac',size:1000,bitRate:900,bitRateIsVariable:true,bitDepth:24,sampleRate:96000,length:125},
+  {filename:'Music\\Artist\\Album\\CD1\\02.mp3',size:500,bitRate:320,length:61},
+  {filename:'Music\\Artist\\Other\\03.flac',size:800,bitRate:800,length:90}
+ ];
+ const f=await fixture(true,null,{}, {responses:[
+  {username:'Zulu Peer',files,hasFreeUploadSlot:false,queueLength:8,uploadSpeed:2048},
+  {username:'Alpha Peer',files:[{filename:'Music\\Artist\\Album\\song.mp3',size:200}],hasFreeUploadSlot:true,queueLength:2,uploadSpeed:1024}
+ ]});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();
+  f.window.document.querySelector('#soulseek-query').value='artist';f.submit('#soulseek-form');await tick();
+  for(const selector of ['#search-format','#search-slots','#search-sort','#search-filter']) assert.ok(f.window.document.querySelector(selector),`Expected ${selector}`);
+  assert.deepEqual([...f.window.document.querySelector('#search-format').options].map(o=>o.value).filter(v=>['all','lossless','mp3','flac'].includes(v)).sort(),['all','flac','lossless','mp3']);
+  assert.ok(f.window.document.querySelector('#search-sort').querySelector('option[value="size"]'));
+  assert.equal(f.window.document.querySelectorAll('.search-file').length,4,'same username and exact filename is deduplicated');
+  const rendered=f.window.document.querySelector('.search-results')?.textContent||f.window.document.querySelector('#search-results').textContent;
+  assert.match(rendered,/FLAC/);assert.match(rendered,/2:05|02:05/);assert.match(rendered,/VBR/i);assert.match(rendered,/24 bit/i);
+  const format=f.window.document.querySelector('#search-format');format.value='mp3';format.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+  assert.ok([...f.window.document.querySelectorAll('.search-file')].every(el=>el.textContent.toLowerCase().includes('.mp3')));
+  const filter=f.window.document.querySelector('#search-filter');filter.value='Zulu Peer CD1 02.mp3';filter.dispatchEvent(new f.window.Event('input',{bubbles:true}));await tick(180);
+  const branch=[...f.window.document.querySelectorAll('[data-download-tree]')].find(el=>el.getAttribute('aria-label')?.includes('folder'));
+  assert.ok(branch,'filtered result has a downloadable folder branch');branch.click();await tick();
+  const download=f.calls.find(c=>c.path==='/api/soulseek/downloads'&&c.method==='POST');
+  assert.deepEqual(download.body.files,[{filename:'Music\\Artist\\Album\\CD1\\02.mp3',size:500}], 'download uses only visible files and preserves original remote filename');
+ }finally{f.close();}
+});
+
+test('Soulseek sorting ranks availability, queues, names, counts and sizes',async()=>{
+ const peer=(username,slot,queue,speed,sizes)=>({username,hasFreeUploadSlot:slot,queueLength:queue,uploadSpeed:speed,files:sizes.map((size,index)=>({filename:`Album/${index}.flac`,size}))});
+ const f=await fixture(true,null,{}, {responses:[peer('Zulu',false,3,3000,[200,200,200]),peer('Alpha',true,5,1000,[500,500]),peer('Beta',true,1,2000,[10])]});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='album';f.submit('#soulseek-form');await tick();
+  for(const [sort,expected] of [['speed',['Beta','Alpha','Zulu']],['queue',['Beta','Alpha','Zulu']],['name',['Alpha','Beta','Zulu']],['files',['Zulu','Alpha','Beta']],['size',['Alpha','Zulu','Beta']]]){
+   const select=f.window.document.querySelector('#search-sort');select.value=sort;select.dispatchEvent(new f.window.Event('change',{bubbles:true}));
+   assert.deepEqual([...f.window.document.querySelectorAll('[data-tree-scope="search"] > details > summary > .tree-label')].map(el=>el.textContent),expected,sort);
+  }
+ }finally{f.close();}
+});
+
+test('Soulseek result list paginates users in batches of 25',async()=>{
+ const responses=Array.from({length:27},(_,i)=>({username:`Peer ${String(i).padStart(2,'0')}`,files:[{filename:`Music\\${i}.flac`,size:i+1}]}));
+ const f=await fixture(true,null,{}, {responses});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='music';f.submit('#soulseek-form');await tick();
+  assert.equal(f.window.document.querySelectorAll('[data-tree-scope="search"] > details').length,25);
+  f.click('[data-action="more-search-results"]');
+  assert.equal(f.window.document.querySelectorAll('[data-tree-scope="search"] > details').length,27);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('unchanged Soulseek poll keeps result DOM and a late response cannot restore a stopped search',async()=>{
+ let starts=0, release;
+ const f=await fixture(true,null,{}, {
+  searchStart:async()=>({id:`search-${++starts}`}),
+  searchResponse:async(id)=>id==='search-1'?{search:{id,isComplete:false},responses:[{username:'Peer',files:[{filename:'Music\\Album\\01.flac',size:10}]}]}:{search:{id,isComplete:false},responses:null}
+ });
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='first';f.submit('#soulseek-form');await tick();
+  const original=f.window.document.querySelector('[data-tree-scope="search"] > details');
+  await f.window.testPollSearch();assert.equal(f.window.document.querySelector('[data-tree-scope="search"] > details'),original,'unchanged response preserves DOM identity');
+  const pending=new Promise(resolve=>{release=resolve;});
+  // Replace the response callback after the first completed fixture response.
+  const fetch=f.window.fetch;
+  f.window.fetch=async(url,options={})=>{
+   if(new URL(url,f.window.location.origin).pathname==='/api/soulseek/searches/search-1'&&options.method!=='DELETE'){
+    f.calls.push({path:'/api/soulseek/searches/search-1',method:'GET'});return {ok:true,status:200,json:()=>pending};
+   }
+   return fetch(url,options);
+  };
+  const stale=f.window.testPollSearch();await tick();
+  f.click('[data-action="stop-search"]');await tick();release({search:{id:'search-1',isComplete:false},responses:[{username:'Late Peer',files:[{filename:'Late.flac',size:1}]}]});await stale;await tick();
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Stopped/);
+  assert.doesNotMatch(f.window.document.querySelector('#search-results').textContent,/Late Peer/);
+ }finally{f.close();}
+});
+
+test('failed Soulseek polls show a retry action and retry can recover',async()=>{
+ let polls=0;
+ const f=await fixture(true,null,{}, {
+  searchResponse:async(id)=>{if(++polls===1)throw new Error('temporary slskd failure');return {search:{id,isComplete:false},responses:[{username:'Recovered Peer',files:[{filename:'Music\\Recovered.flac',size:12}]}]};}
+ });
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='recover';f.submit('#soulseek-form');await tick();
+  assert.match(f.window.document.querySelector('#search-status').textContent,/temporary slskd failure/);
+  f.click('[data-action="retry-search"]');await tick();
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Searching|Search complete/);
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Recovered Peer/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('a failed old search response cannot replace results for a newer query',async()=>{
+ let starts=0,rejectOld;
+ const oldResult=new Promise((resolve,reject)=>{rejectOld=reject;});
+ const f=await fixture(true,null,{}, {
+  searchStart:async()=>({id:`search-${++starts}`}),
+  searchResponse:async(id)=>id==='search-1'?oldResult:{search:{id,isComplete:true},responses:[{username:'New Peer',files:[{filename:'Music\\New.flac',size:20}]}]}
+ });
+ try{
+  f.click('[data-nav="soulseek"]');await tick();const input=f.window.document.querySelector('#soulseek-query');input.value='first';f.submit('#soulseek-form');await tick();
+  f.window.document.querySelector('#soulseek-query').value='second';f.submit('#soulseek-form');await tick();
+  assert.equal(f.calls.filter(call=>call.path==='/api/soulseek/searches'&&call.method==='POST').at(-1).body.query,'second');
+  assert.deepEqual(f.calls.filter(call=>call.path==='/api/soulseek/searches/search-1'&&['PUT','DELETE'].includes(call.method)).map(call=>call.method),['PUT','DELETE']);
+  rejectOld(new Error('stale failure'));await tick();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/New Peer/);
+  assert.doesNotMatch(f.window.document.querySelector('#search-status').textContent,/stale failure/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('slskd terminal search states distinguish cancellation, deadline and error',async()=>{
+ for(const [remoteState,expected] of [
+  ['Completed, Cancelled','Stopped'],
+  ['Completed, TimedOut','Search time limit reached'],
+  ['Completed, Errored','Search interrupted']
+ ]){
+  const f=await fixture(true,null,{}, {searchResponse:async(id)=>({search:{id,state:remoteState,errorMessage:'peer connection dropped'},responses:[]})});
+  try{
+   f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='terminal';f.submit('#soulseek-form');await tick();
+   assert.match(f.window.document.querySelector('#search-status').textContent,new RegExp(expected));
+   assert.equal(Boolean(f.window.document.querySelector('#search-status .spinner')),false,`${remoteState} is terminal`);
+   if(remoteState.endsWith('Errored')){
+    assert.match(f.window.document.querySelector('#search-status').textContent,/The remote search ended with an error\. Retry to start a new search/);
+    assert.doesNotMatch(f.window.document.querySelector('#search-status').textContent,/peer connection dropped/,'raw upstream details stay hidden');
+    assert.ok(f.window.document.querySelector('[data-action="retry-search"]'));
+   }
+  }finally{f.close();}
+ }
+});
+
+test('retry after terminal slskd error starts a fresh search request',async()=>{
+ let starts=0;
+ const f=await fixture(true,null,{}, {
+  searchStart:async()=>({id:`terminal-${++starts}`}),
+  searchResponse:async(id)=>id==='terminal-1'?{search:{id,state:'Completed, Errored',errorMessage:'upstream error'},responses:[]}:{search:{id,state:'Completed, Succeeded'},responses:[{username:'Retry Peer',files:[{filename:'Retry.flac',size:1}]}]}
+ });
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='retry';f.submit('#soulseek-form');await tick();
+  f.click('[data-action="retry-search"]');await tick();
+  assert.equal(f.calls.filter(call=>call.path==='/api/soulseek/searches'&&call.method==='POST').length,2);
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Retry Peer/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('pollSearch does not issue overlapping GET requests',async()=>{
+ let release,responseCalls=0;
+ const pending=new Promise(resolve=>{release=resolve;});
+ const f=await fixture(true,null,{}, {searchResponse:async(id)=>{responseCalls++;return pending;}});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();f.window.document.querySelector('#soulseek-query').value='overlap';f.submit('#soulseek-form');await tick();
+  const poll=f.window.testPollSearch();await tick();const parallelA=f.window.testPollSearch(),parallelB=f.window.testPollSearch();await Promise.all([parallelA,parallelB]);
+  assert.equal(responseCalls,1,'in-flight request prevents additional polls');
+  release({search:{id:search,state:'Searching'},responses:[]});await poll;await tick();
+  assert.equal(responseCalls,1);
  }finally{f.close();}
 });
 

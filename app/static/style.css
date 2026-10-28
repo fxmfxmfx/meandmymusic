@@ -21,3 +21,20 @@ dialog{color:var(--text);background:var(--panel);border:1px solid var(--line);bo
 .upload-menu{position:relative}.upload-menu>summary{list-style:none;display:flex;align-items:center;gap:8px;padding:9px 13px;border:1px solid var(--line);border-radius:8px;background:var(--raised);color:var(--text);font-size:13px}.upload-menu>summary::-webkit-details-marker{display:none}.upload-menu>div{position:absolute;right:0;top:calc(100% + 6px);z-index:30;display:grid;min-width:140px;padding:5px;border:1px solid var(--line);border-radius:8px;background:var(--panel);box-shadow:0 8px 25px #0003}.upload-menu button{justify-content:flex-start;background:transparent;border-color:transparent}.upload-menu button:hover{background:var(--raised)}
 .manual-destination{display:block;background:var(--bg);border:1px solid var(--line);padding:9px 11px;border-radius:7px;font-size:11px;overflow-wrap:anywhere;margin-top:10px}.picker-create{margin-top:15px}.picker-create>summary{padding:7px 0;display:flex;gap:7px;align-items:center}.picker-create .search-form{margin-top:8px}.plan-track>.muted{display:flex;align-items:center;gap:7px}
 .library-heading-time{font-size:.72em;font-weight:400;color:var(--muted);white-space:nowrap}.page-heading h1{min-width:0}.result-path{display:block;color:var(--muted);font-size:10px;overflow-wrap:anywhere;margin:4px 0}.library-search-summary{font-size:11px;color:var(--muted);margin:12px 0}.search-more{margin-top:16px}.filter-input[type=search]{min-width:0}
+
+/* Soulseek controls stay outside the live result tree to preserve input focus. */
+.search-help{color:var(--muted);font-size:11px;line-height:1.7;margin-top:12px}
+.search-tools{align-items:center;gap:12px;padding:14px;border:1px solid var(--line);border-radius:9px;background:var(--panel)}
+.search-tools label{font-size:11px;color:var(--muted);flex:1;min-width:120px}
+.search-tools input[type=search]{padding:8px 10px;width:100%;min-width:0}
+.search-tools select{min-width:0;width:100%}
+.search-tools .search-slot-label{display:flex;flex:0 1 auto;gap:8px;align-items:center;align-self:flex-end;padding-bottom:9px;white-space:nowrap}
+.search-slot-label input{width:16px;height:16px;accent-color:var(--accent)}
+.search-summary{display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-height:22px}
+.search-summary strong{font-weight:500;color:var(--text)}
+.search-visible{font-size:11px;line-height:1.7;color:var(--muted);margin:12px 0}
+#search-status .error-box{margin-bottom:15px}
+#search-status .error-box p{overflow-wrap:anywhere}
+#search-results .tree-meta small{display:block;font-size:10px;margin-top:4px}
+.search-tools[hidden],[data-action=stop-search][hidden]{display:none}
+@media(max-width:700px){.search-tools label:first-child{flex-basis:100%}.search-tools label{min-width:100px}.search-tools .search-slot-label{flex-basis:100%;padding:4px 0}.search-summary{gap:6px}.search-summary>span:last-child{flex-basis:100%}.search-summary>.spinner{flex-basis:auto}.search-form>button{flex:1}}

@@ -50,7 +50,7 @@ class Move(BaseModel):
 
 
 class Search(BaseModel):
-    query: str = Field(min_length=2, max_length=300)
+    query: str = Field(max_length=300)
 
 
 class DownloadFile(BaseModel):
@@ -486,16 +486,29 @@ def create_app(settings=None):
 
     @app.post("/api/soulseek/searches")
     async def search(data: Search):
-        return await soulseek.request("POST", "/searches", {"searchText": data.query.strip(), "fileLimit": 3000, "responseLimit": 100})
+        query = data.query.strip()
+        if len(query) < 2:
+            raise HTTPException(400, "Search query must contain at least 2 characters")
+        return await soulseek.request("POST", "/searches", {"searchText": query, "fileLimit": 3000, "responseLimit": 100})
 
     @app.get("/api/soulseek/searches/{search_id}")
-    async def search_results(search_id: UUID):
-        status, responses = await asyncio.gather(soulseek.request("GET", f"/searches/{search_id}"),
-                                                 soulseek.request("GET", f"/searches/{search_id}/responses"))
-        return {"search": status, "responses": responses}
+    async def search_results(search_id: UUID, since: str | None = Query(default=None, max_length=64)):
+        status = await soulseek.request("GET", f"/searches/{search_id}")
+        counters = ("responseCount", "fileCount", "lockedFileCount")
+        values = [status.get(key) if isinstance(status, dict) else None for key in counters]
+        valid_counters = all(type(value) is int and value >= 0 for value in values)
+        revision = ":".join(str(value) for value in values) if valid_counters else None
+        if valid_counters and since == revision:
+            return {"search": status, "responses": None, "revision": revision}
+        responses = await soulseek.request("GET", f"/searches/{search_id}/responses")
+        return {"search": status, "responses": responses, "revision": revision}
+
+    @app.put("/api/soulseek/searches/{search_id}")
+    async def cancel_search(search_id: UUID):
+        return await soulseek.request("PUT", f"/searches/{search_id}")
 
     @app.delete("/api/soulseek/searches/{search_id}")
-    async def stop_search(search_id: UUID):
+    async def delete_search(search_id: UUID):
         return await soulseek.request("DELETE", f"/searches/{search_id}")
 
     @app.post("/api/soulseek/downloads")

@@ -13,3 +13,5 @@ pytest-of-root/
 /tmp*
 
 /compose.override.yaml
+
+/output/playwright/

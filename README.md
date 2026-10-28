@@ -29,6 +29,14 @@ another music server.
   Manager sign-out is also in Settings; Soulseek connection status is in its tab.
 - Browse Soulseek search results and downloads as user/folder/file trees. Download
   a file or an entire branch, including nested disc folders.
+- Filter Soulseek results by filename, folder, user, format or free upload slots.
+  Sort users by speed, queue, name, file count or size; show more users in batches
+  of 25. Folder downloads include only files matching the current filters.
+- Inspect file duration, format, bitrate, VBR, bit depth and sample rate when
+  provided by the peer, alongside file sizes, upload speeds and queues. Format
+  filters use filename extensions; M4A is separate because its codec is unknown.
+- Search updates arrive without overlapping polls or rebuilding unchanged trees.
+  Stop keeps the results already found; an interrupted request can be retried.
 - Sort downloads by time, name, status, progress or size; filter active, successful
   or failed transfers. Clear finished records without deleting downloaded files.
 - Receive in-app notices when a file or selected folder finishes downloading,

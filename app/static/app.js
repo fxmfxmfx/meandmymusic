@@ -2,6 +2,7 @@
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
+Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0});
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -49,6 +50,7 @@ async function api(url, options={}) {
 }
 function brand(){return `<div class="brand"><div class="brand-mark">${icon('disc')}</div><div class="brand-type">me&my<span>MUSIC MANAGER</span></div></div>`;}
 function showLogin(){
+ invalidateSearch();state.searchPhase='';state.searchError=null;state.searchRevision=null;state.searchSnapshot=null;
  stopFileSearch();state.fileSearch=null;state.fileSearchError=null;
  clearTimeout(state.libraryTimeTimer);state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;state.libraryStats=null;
  if(state.drag)finishDrag(false);
@@ -252,13 +254,25 @@ function fileDialog(mode){
  modal.querySelector('input').focus();modal.querySelector('input').select();
 }
 function renderSoulseek(){
- document.querySelector('#content').innerHTML=heading('03','Soulseek','',`<span class="status-pill" id="slskd-status"></span>`)+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><button class="primary" type="submit">${icon('search')}Search</button>${state.searchId&&!state.searchDone?'<button type="button" data-action="stop-search">Stop</button>':''}</form><p class="search-help">Browse users and folders. Download a branch or an individual file.</p></section><div id="search-results"></div>`;
+ rememberTree('search');
+ document.querySelector('#content').innerHTML=heading('03','Soulseek','',`<span class="status-pill" id="slskd-status"></span>`)+`<section class="search-box"><form id="soulseek-form" class="search-form"><label class="visually-hidden" for="soulseek-query">Search Soulseek</label><input id="soulseek-query" name="query" placeholder="Artist, album or track…" value="${esc(state.searchQuery)}" minlength="2" maxlength="300" required><button class="primary" type="submit" ${state.searchPhase==='starting'?'disabled':''}>${icon('search')}${state.searchPhase==='starting'?'Starting…':'Search'}</button><button type="button" data-action="stop-search" ${['starting','searching'].includes(state.searchPhase)?'':'hidden'}>Stop</button></form><p class="search-help">Results arrive as users respond. Search with artist and album names for more specific results.</p></section><section class="search-tools list-toolbar" aria-label="Filter search results" ${state.searchId?'':'hidden'}><label>Filter results<input id="search-filter" type="search" placeholder="File, folder or user" value="${esc(state.searchFilter)}"></label><label>Format<select id="search-format">${['all','lossless','flac','mp3','m4a','aac','ogg','opus','wav','aiff','alac','ape','wv','other'].map(value=>`<option value="${value}" ${state.searchFormat===value?'selected':''}>${value==='all'?'All formats':value==='lossless'?'Lossless':value==='other'?'Other files':value.toUpperCase()}</option>`).join('')}</select></label><label>Sort users by<select id="search-sort">${[['speed','Available, then fastest'],['queue','Shortest queue'],['name','Username'],['files','Most files'],['size','Largest size']].map(([value,label])=>`<option value="${value}" ${state.searchSort===value?'selected':''}>${label}</option>`).join('')}</select></label><label class="search-slot-label"><input id="search-slots" type="checkbox" ${state.searchSlots?'checked':''}>Free slots only</label></section><div id="search-status" role="status" aria-live="polite"></div><div id="search-results"></div>`;
  updateStatus();renderSearchResults();
 }
 function normalizeResults(responses){
- const groups=new Map();
- for(const response of Array.isArray(responses)?responses:[]){for(const file of response.files||[]){if(!file.filename)continue;const split=file.filename.lastIndexOf('\\');const folder=split>=0?file.filename.slice(0,split):'';const key=JSON.stringify([response.username,folder]);if(!groups.has(key))groups.set(key,{username:response.username,folder,files:[],speed:response.uploadSpeed,queue:response.queueLength,slot:response.hasFreeUploadSlot});groups.get(key).files.push(file);}}
- return [...groups.values()].sort((a,b)=>Number(b.slot)-Number(a.slot)||(b.speed||0)-(a.speed||0));
+ const groups=new Map(),seen=new Map();
+ for(const response of Array.isArray(responses)?responses:[]){
+  if(typeof response.username!=='string')continue;
+  if(!seen.has(response.username))seen.set(response.username,new Set());
+  for(const file of response.files||[]){
+   if(typeof file.filename!=='string'||!file.filename||seen.get(response.username).has(file.filename))continue;
+   seen.get(response.username).add(file.filename);
+   const split=Math.max(file.filename.lastIndexOf('\\'),file.filename.lastIndexOf('/')),folder=split>=0?file.filename.slice(0,split):'';
+   const key=JSON.stringify([response.username,folder]);
+   if(!groups.has(key))groups.set(key,{username:response.username,folder,files:[],speed:response.uploadSpeed,queue:response.queueLength,slot:response.hasFreeUploadSlot});
+   groups.get(key).files.push(file);
+  }
+ }
+ return [...groups.values()];
 }
 // Remote paths are display keys only. Keep original filenames for slskd requests.
 function remoteParts(filename){return String(filename||'').split(/[\\/]/).filter(Boolean);}
@@ -280,24 +294,109 @@ function treeBranch(scope,node,depth,body,actions,meta){
  const key=treeKey(scope,node),open=state.treeOpen.has(key)?state.treeOpen.get(key):depth<2;
  return `<details class="tree-branch" data-tree-key="${esc(key)}" ${open?'open':''}><summary><span class="tree-chevron" aria-hidden="true">›</span>${icon(node.user?'download':'folder')}<span class="tree-label">${esc(node.name||'Files')}</span><span class="tree-meta">${meta}</span><span class="tree-actions">${actions}</span></summary><div class="tree-children">${body}</div></details>`;
 }
+const losslessFormats=new Set(['flac','wav','aiff','alac','ape','wv']);
+const searchFormats=new Set([...losslessFormats,'mp3','m4a','aac','ogg','opus']);
+function remoteFormat(file){
+ const extension=basename(file.filename).split('.').pop().toLowerCase();
+ return ({aif:'aiff'})[extension]||extension;
+}
+function remoteDuration(seconds){return Number.isFinite(Number(seconds))&&Number(seconds)>0?`${Math.floor(seconds/60)}:${String(Math.floor(seconds%60)).padStart(2,'0')}`:'';}
+function remoteQuality(file){
+ return [remoteFormat(file).toUpperCase(),remoteDuration(file.length),file.bitRate?`${file.bitRate} kbps${file.isVariableBitRate?' VBR':''}`:'',file.bitDepth?`${file.bitDepth} bit`:'',file.sampleRate?`${Number((file.sampleRate/1000).toFixed(3))} kHz`:''].filter(Boolean);
+}
+function searchFiles(){
+ const terms=state.searchFilter.trim().toLowerCase().split(/\s+/).filter(Boolean);
+ return state.groups.flatMap((group,g)=>{
+  if(state.searchSlots&&group.slot!==true)return [];
+  return group.files.flatMap((file,f)=>{
+   const format=remoteFormat(file),text=`${group.username} ${file.filename}`.toLowerCase();
+   if(!terms.every(term=>text.includes(term)))return [];
+   if(state.searchFormat==='lossless'?!losslessFormats.has(format):state.searchFormat==='other'?searchFormats.has(format):state.searchFormat!=='all'&&state.searchFormat!==format)return [];
+   return [{...file,username:group.username,group:g,index:f}];
+  });
+ });
+}
+function searchCount(n,label){return `${n} ${label}${n===1?'':'s'}`;}
+function renderSearchStatus(){
+ const el=document.querySelector('#search-status');if(!el)return;
+ const labels={starting:'Starting search…',searching:'Searching…',complete:'Search complete',timeout:'Search time limit reached',stopped:'Stopped',error:'Search interrupted'};
+ const text=labels[state.searchPhase]||'';
+ const counts=state.searchId?`${searchCount(state.groups.reduce((n,g)=>n+g.files.length,0),'file')} · ${searchCount(state.groups.length,'folder')} · ${searchCount(new Set(state.groups.map(g=>g.username)).size,'user')}`:'';
+ const polling=['starting','searching'].includes(state.searchPhase);
+ el.innerHTML=(text||counts)?`<div class="search-summary">${polling?'<span class="spinner"></span>':''}<strong>${text}</strong>${counts?`<span>${counts}</span>`:''}</div>${state.searchError?`<div class="error-box"><p>${esc(state.searchError)}</p><button data-action="retry-search">${icon('refresh')}Retry</button></div>`:''}`:'';
+ const stop=document.querySelector('[data-action="stop-search"]');if(stop)stop.hidden=!polling;
+}
 function renderSearchResults(){
- const el=document.querySelector('#search-results');if(!el)return;rememberTree('search');
- if(!state.searchId){el.innerHTML=`<div class="empty">${icon('search')}<h3>Search for music</h3><p>Enter an artist, album or track name.</p></div>`;return;}
+ const el=document.querySelector('#search-results');if(!el)return;
+ renderSearchStatus();
+ if(!state.searchId){el.innerHTML=state.searchPhase==='starting'?'<div class="loading">Waiting for search results…</div>':`<div class="empty">${icon('search')}<h3>Search for music</h3><p>Enter an artist, album or track name.</p></div>`;return;}
+ const signature=JSON.stringify([state.searchVersion,state.searchFilter,state.searchFormat,state.searchSlots,state.searchSort,state.searchLimit]);
+ // Unchanged polls must preserve native details, focus and in-progress clicks.
+ if(state.searchRenderedElement===el&&state.searchRenderedSignature===signature)return;
+ rememberTree('search');state.searchRenderedElement=el;state.searchRenderedSignature=signature;
+ const files=searchFiles(),peers=new Map(state.groups.map(group=>[group.username,group]));
+ const users=remoteTree(files).sort((a,b)=>{
+  const pa=peers.get(a.username),pb=peers.get(b.username),mode=state.searchSort;
+  const total=node=>node.files.reduce((sum,f)=>sum+(Number(f.size)||0),0);
+  return (mode==='name'?0:mode==='files'?b.files.length-a.files.length:mode==='size'?total(b)-total(a):mode==='queue'?Number(pb.slot===true)-Number(pa.slot===true)||(pa.queue??Infinity)-(pb.queue??Infinity):Number(pb.slot===true)-Number(pa.slot===true)||(Number(pb.speed)||0)-(Number(pa.speed)||0))||a.name.localeCompare(b.name);
+ });
  state.searchNodes=new Map();let id=0;
- const files=state.groups.flatMap((group,g)=>group.files.map((file,f)=>({...file,username:group.username,group:g,index:f})));
  const render=(node,depth)=>{
   const nodeId=String(id++);state.searchNodes.set(nodeId,node);
-  const body=[...node.children.values()].sort((a,b)=>a.name.localeCompare(b.name)).map(n=>render(n,depth+1)).join('')+node.direct.sort((a,b)=>a.filename.localeCompare(b.filename)).map(file=>`<div class="tree-file search-file">${icon('music')}<span class="tree-label">${esc(basename(file.filename))}<small>${size(file.size)}${file.bitRate?` · ${esc(file.bitRate)} kbps`:''}${file.bitDepth?` · ${esc(file.bitDepth)} bit / ${esc(file.sampleRate||'?')} Hz`:''}</small></span><button class="quiet icon-button" data-download-file="${file.group}:${file.index}" aria-label="Download ${esc(basename(file.filename))}">${icon('download')}</button></div>`).join('');
-  const peer=state.groups.find(g=>g.username===node.username);
-  const meta=`${node.files.length} files · ${size(node.files.reduce((sum,f)=>sum+(f.size||0),0))}${node.user?` · ${peer.slot?'slot available':`queue: ${esc(peer.queue||0)}`}${peer.speed?` · ${size(peer.speed)}/s`:''}`:''}`;
+  const body=[...node.children.values()].sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true})).map(n=>render(n,depth+1)).join('')+node.direct.sort((a,b)=>a.filename.localeCompare(b.filename,undefined,{numeric:true})).map(file=>`<div class="tree-file search-file">${icon(searchFormats.has(remoteFormat(file))?'music':'file')}<span class="tree-label" title="${esc(file.filename)}">${esc(basename(file.filename))}<small>${[...remoteQuality(file),size(file.size)].map(esc).join(' · ')}</small></span><button class="quiet icon-button" data-download-file="${file.group}:${file.index}" aria-label="Download ${esc(basename(file.filename))}">${icon('download')}</button></div>`).join('');
+  const peer=peers.get(node.username),formats=[...new Set(node.files.map(remoteFormat))].sort().map(f=>f.toUpperCase()).join(' / ');
+  const availability=peer.slot===true?'Free slot':peer.slot===false?`Queue: ${peer.queue==null?'unknown':peer.queue}`:'Slot unknown';
+  const meta=`${searchCount(node.files.length,'file')} · ${size(node.files.reduce((sum,f)=>sum+(Number(f.size)||0),0))}<small>${esc(node.user?`${availability}${peer.speed?` · ${size(peer.speed)}/s`:''}`:formats)}</small>`;
   return treeBranch('search',node,depth,body,`<button class="small primary" data-download-tree="${nodeId}" aria-label="Download ${node.user?'all results from':'folder'} ${esc(node.name)}">${icon('download')}<span>${node.user?'Download all':'Download folder'}</span></button>`,meta);
  };
- el.innerHTML=`<div class="search-summary">${!state.searchDone?'<span class="spinner"></span>Searching… ':''}${files.length} files · ${state.groups.length} folders${state.searchDone?' · search complete':''}</div><div class="remote-tree" data-tree-scope="search">${remoteTree(files).map(n=>render(n,0)).join('')}</div>`+(state.searchDone&&!files.length?'<div class="empty"><h3>No results</h3><p>Try another query or check your Soulseek connection.</p></div>':'');
+ el.innerHTML=`<p class="search-visible">${searchCount(files.length,'matching file')} · ${searchCount(users.length,'user')}${users.length>state.searchLimit?` · showing ${state.searchLimit}`:''}${state.searchFilter||state.searchFormat!=='all'||state.searchSlots?' · Folder downloads include filtered files only.':''}</p>`+(users.length?`<div class="remote-tree" data-tree-scope="search">${users.slice(0,state.searchLimit).map(n=>render(n,0)).join('')}</div>${users.length>state.searchLimit?'<button class="search-more" data-action="more-search-results">Show more users</button>':''}`:`<div class="empty"><h3>${state.groups.length?'No results in this filter':state.searchDone?'No results':'Waiting for results…'}</h3><p>${state.groups.length?'Change the filters to see more files.':state.searchDone?'Try fewer search terms or check your Soulseek connection.':'Users may take a few seconds to respond.'}</p></div>`);
 }
+function invalidateSearch(){clearTimeout(state.searchTimer);state.searchTimer=null;state.searchEpoch++;state.searchRequest=null;}
 async function pollSearch(){
- const id=state.searchId;if(!id)return;
- try{const data=await api(`/soulseek/searches/${id}`);if(id!==state.searchId)return;state.groups=normalizeResults(data.responses);state.searchDone=Boolean(data.search.isComplete)||String(data.search.state||'').includes('Completed');if(state.searchDone)clearInterval(state.searchTimer);if(state.page==='soulseek')renderSearchResults();}
- catch(error){clearInterval(state.searchTimer);state.searchDone=true;toast(error.message,true);}
+ const id=state.searchId,epoch=state.searchEpoch;if(!id||state.searchRequest)return;
+ clearTimeout(state.searchTimer);
+ const request=state.searchRequest={id,epoch};
+ try{
+  const data=await api(`/soulseek/searches/${id}${state.searchRevision==null?'':`?since=${encodeURIComponent(state.searchRevision)}`}`);
+  if(id!==state.searchId||epoch!==state.searchEpoch)return;
+  if(Array.isArray(data.responses)){const groups=normalizeResults(data.responses),snapshot=JSON.stringify(groups);if(snapshot!==state.searchSnapshot){state.groups=groups;state.searchSnapshot=snapshot;state.searchVersion++;}}
+  state.searchRevision=data.revision??null;
+  const status=String(data.search.state||'');
+  state.searchDone=data.search.isComplete===true||/Completed|Cancelled|TimedOut|Errored/i.test(status);
+  state.searchFailedTerminal=/Errored/i.test(status);
+  state.searchPhase=state.searchFailedTerminal?'error':/Cancelled/i.test(status)?'stopped':/TimedOut/i.test(status)?'timeout':state.searchDone?'complete':'searching';
+  state.searchError=state.searchFailedTerminal?'The remote search ended with an error. Retry to start a new search. Results found so far are kept.':null;
+  if(state.page==='soulseek')renderSearchResults();
+ }catch(error){
+  if(id!==state.searchId||epoch!==state.searchEpoch)return;
+  state.searchDone=true;state.searchPhase='error';state.searchError=error.message;
+  if(state.page==='soulseek')renderSearchResults();
+ }finally{
+  if(state.searchRequest===request){state.searchRequest=null;if(!state.searchDone&&epoch===state.searchEpoch)state.searchTimer=setTimeout(pollSearch,state.groups.length?1500:700);}
+ }
+}
+async function discardSearch(id){
+ try{await api(`/soulseek/searches/${id}`,{method:'PUT'});await api(`/soulseek/searches/${id}`,{method:'DELETE'});}catch{}
+}
+async function startSearch(value){
+ const text=String(value).trim();if(text.length<2||text.length>300)throw new Error('Enter between 2 and 300 characters');
+ const oldId=state.searchId,oldActive=oldId&&!state.searchDone;invalidateSearch();const epoch=state.searchEpoch;
+ state.searchQuery=text;state.searchId=null;state.groups=[];state.searchDone=false;state.searchPhase='starting';state.searchError=null;state.searchFailedTerminal=false;state.searchRevision=null;state.searchSnapshot=null;state.searchVersion++;state.searchLimit=25;
+ for(const key of state.treeOpen.keys())if(key.startsWith('["search",'))state.treeOpen.delete(key);
+ if(state.page==='soulseek')renderSoulseek();
+ // Releasing the previous search must not delay the next network search.
+ if(oldActive)discardSearch(oldId);
+ try{
+  const result=await api('/soulseek/searches',{method:'POST',body:{query:text}});
+  if(epoch!==state.searchEpoch){if(result.id)discardSearch(result.id);return;}
+  if(!result.id)throw new Error('slskd did not return a search ID');
+  state.searchId=result.id;state.searchPhase='searching';if(state.page==='soulseek')renderSoulseek();await pollSearch();
+ }catch(error){if(epoch!==state.searchEpoch)return;state.searchDone=true;state.searchPhase='error';state.searchError=error.message;if(state.page==='soulseek')renderSoulseek();}
+}
+async function stopSearch(){
+ const id=state.searchId;invalidateSearch();const epoch=state.searchEpoch;state.searchDone=true;state.searchPhase='stopped';state.searchError=null;
+ if(state.page==='soulseek')renderSearchResults();
+ if(id)try{await api(`/soulseek/searches/${id}`,{method:'PUT'});}catch(error){if(epoch!==state.searchEpoch)return;state.searchError=`Could not stop the remote search. ${error.message}`;if(state.page==='soulseek')renderSearchStatus();}
 }
 async function downloadFiles(group,files){
  const unique=[...new Map(files.map(file=>[file.filename,file])).values()];let queued=0;
@@ -479,7 +578,7 @@ function playFile(path){
  document.querySelector('#player-slot').innerHTML=`<section class="player" aria-label="Player"><div class="player-title">${icon('disc')}<div><strong>${esc(entry?.name||basename(path))}</strong><small>Library audio</small></div></div><audio id="audio-player" controls autoplay src="${esc(mediaURL(path))}"></audio><button class="quiet icon-button" data-action="close-player" aria-label="Close player">${icon('close')}</button></section>`;
  const player=document.querySelector('#audio-player');player.addEventListener('error',()=>toast('Your browser cannot play this audio format.',true));player.play().catch(()=>{});
 }
-document.addEventListener('input',event=>{if(event.target.id==='manual-album-name'){state.manualAlbumName=event.target.value;updateManualDestination();}if(event.target.id==='file-filter'){state.filter=event.target.value;scheduleLibrarySearch();}});
+document.addEventListener('input',event=>{if(event.target.id==='search-filter'){state.searchFilter=event.target.value;state.searchLimit=25;clearTimeout(state.searchFilterTimer);state.searchFilterTimer=setTimeout(()=>{if(state.page==='soulseek')renderSearchResults();},150);}if(event.target.id==='manual-album-name'){state.manualAlbumName=event.target.value;updateManualDestination();}if(event.target.id==='file-filter'){state.filter=event.target.value;scheduleLibrarySearch();}});
 document.addEventListener('dblclick',event=>{const row=event.target.closest('[data-select]');if(!row)return;const entry=state.entries.find(e=>e.path===row.dataset.select);if(entry?.directory)openFolder(entry.path).catch(error=>toast(error.message,true));else if(entry?.audio)playFile(entry.path);});
 document.addEventListener('keydown',event=>{if(event.key==='Enter'&&event.target.matches('tr[data-select]')){selectFile(event.target.dataset.select);}});
 function manualImportDialog(path,destination=''){
@@ -628,6 +727,7 @@ document.addEventListener('drop',async event=>{
 });
 document.addEventListener('dragend',()=>{if(state.drag)finishDrag();});
 document.addEventListener('change',async event=>{
+ if(['search-format','search-sort','search-slots'].includes(event.target.id)){if(event.target.id==='search-format')state.searchFormat=event.target.value;else if(event.target.id==='search-sort')state.searchSort=event.target.value;else state.searchSlots=event.target.checked;state.searchLimit=25;renderSearchResults();}
  if(event.target.matches('#upload-files-input,#upload-folder-input')){const files=[...event.target.files].map(file=>({file,path:file.webkitRelativePath||file.name}));event.target.value='';await startUpload(files,[]);return;}
  if(event.target.id==='delete-inbox-after-import'){state.preferenceEdited=true;const input=event.target,old=state.preferences.delete_inbox_after_import;input.disabled=true;try{state.preferences=await api('/preferences',{method:'PATCH',body:{delete_inbox_after_import:input.checked}});toast(state.preferences.delete_inbox_after_import?'Inbox cleanup enabled. New previews will show the deletion.':'Inbox cleanup disabled.');}catch(error){input.checked=old;toast(error.message,true);}finally{input.disabled=false;}return;}
  if(event.target.id==='transfer-sort'){state.transferSort=event.target.value;renderTransfers();}
@@ -689,7 +789,9 @@ document.addEventListener('click',async event=>{
   else if(action==='soulseek-logout'){button.disabled=true;await api('/soulseek/auth/logout',{method:'POST'});await refreshAccount();toast('Signed out of Soulseek.');}
   else if(action==='soulseek-forget'){button.disabled=true;await api('/soulseek/auth/saved',{method:'DELETE'});await refreshAccount();toast('Saved account removed.');}
   else if(action==='soulseek-reconnect'){button.disabled=true;state.accountBusy=true;try{await api('/soulseek/auth/reconnect',{method:'POST'});}finally{state.accountBusy=false;await refreshAccount();}}
-  else if(action==='stop-search'){clearInterval(state.searchTimer);await api(`/soulseek/searches/${state.searchId}`,{method:'DELETE'});state.searchDone=true;renderSoulseek();}
+  else if(action==='stop-search')await stopSearch();
+  else if(action==='retry-search'){if(state.searchId&&!state.searchFailedTerminal){invalidateSearch();state.searchDone=false;state.searchError=null;state.searchPhase='searching';renderSearchStatus();await pollSearch();}else await startSearch(state.searchQuery);}
+  else if(action==='more-search-results'){state.searchLimit+=25;renderSearchResults();}
  }catch(error){toast(error.message,true);}finally{if(button.isConnected)button.disabled=false;}
 });
 document.addEventListener('submit',async event=>{
@@ -713,11 +815,7 @@ document.addEventListener('submit',async event=>{
    modal.close();state.selected=null;await loadFiles();toast('Done.');
   }
   else if(form.id==='soulseek-form'){
-   clearInterval(state.searchTimer);if(state.searchId&&!state.searchDone)await api(`/soulseek/searches/${state.searchId}`,{method:'DELETE'}).catch(()=>{});
-   state.searchQuery=String(values.get('query')).trim();const result=await api('/soulseek/searches',{method:'POST',body:{query:state.searchQuery}});
-   document.querySelector('#search-results').innerHTML='';state.searchId=result.id;state.groups=[];state.searchDone=false;for(const key of state.treeOpen.keys())if(key.startsWith('["search",'))state.treeOpen.delete(key);
-   if(!state.searchId)throw new Error('slskd did not return a search ID');
-   renderSoulseek();await pollSearch();if(!state.searchDone)state.searchTimer=setInterval(pollSearch,2000);
+   await startSearch(values.get('query'));
   }
   else if(form.id==='release-form')await searchReleases(String(values.get('artist')).trim(),String(values.get('album')).trim());
   else if(form.id==='mbid-form'){const match=String(values.get('mbid')).match(/(?:^|release\/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:$|[?#/])/i);if(!match)throw new Error('Enter a valid release MBID or MusicBrainz release URL');await makePreview(match[1]);}

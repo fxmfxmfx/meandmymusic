@@ -203,6 +203,93 @@ test('tree search and downloads support native expansion, branch downloads, comp
  assert.deepEqual(errors,[]);
 });
 
+test('Soulseek search filters, revision polling, stop and filtered nested downloads work in the browser',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ const searchId='fixture-search-1', puts=[],gets=[],downloads=[];
+ let releaseFirst;
+ const firstResponse=new Promise(resolve=>releaseFirst=resolve);
+ let releaseStale,markSecond,markThird;
+ const staleResponse=new Promise(resolve=>releaseStale=resolve),secondPoll=new Promise(resolve=>markSecond=resolve),thirdPoll=new Promise(resolve=>markThird=resolve);
+ let holdFirst=true;
+ const responses=[
+  {username:'Zulu Peer',hasFreeUploadSlot:false,queueLength:8,uploadSpeed:900,files:[
+   {filename:'Music\\Shared Album\\CD1\\01 Song.flac',size:12000000,length:212,bitRate:900,bitDepth:16,sampleRate:44100},
+   {filename:'Music\\Shared Album\\CD2\\01 Other.mp3',size:3000000,length:205,bitRate:192},
+  ]},
+  {username:'Able Peer',hasFreeUploadSlot:true,queueLength:0,uploadSpeed:12000,files:[
+   {filename:'Music\\Shared Album\\CD1\\01 Song.flac',size:14000000,length:212,bitRate:1000,bitDepth:24,sampleRate:96000},
+   {filename:'Music\\Shared Album\\CD1\\02 Bonus.wav',size:5000000,length:180,bitDepth:16,sampleRate:44100},
+  ]},
+ ];
+ await page.route('**/api/system',route=>route.fulfill({json:{slskd:true,slskd_configured:true}}));
+ await page.route('**/api/soulseek/searches',route=>route.fulfill({json:{id:searchId}}));
+ await page.route('**/api/soulseek/searches/*',async route=>{
+  if(route.request().method()==='PUT'){puts.push(route.request().url());await route.fulfill({json:{ok:true}});return;}
+  gets.push(new URL(route.request().url()).searchParams.get('since'));
+  if(holdFirst){holdFirst=false;await firstResponse;await route.fulfill({json:{search:{isComplete:false},responses,revision:'r:f:l'}});return;}
+  if(gets.length===2)markSecond();
+  if(gets.length===3){markThird();await staleResponse;await route.fulfill({json:{search:{isComplete:false},responses:[{username:'Stale Peer',files:[{filename:'Old\\Stale\\track.flac',size:10}]}],revision:'stale'}});return;}
+  await route.fulfill({json:{search:{isComplete:false},responses:null,revision:'r:f:l'}});
+ });
+ await page.route('**/api/soulseek/downloads',async route=>{if(route.request().method()==='POST'){downloads.push(route.request().postDataJSON());await route.fulfill({json:{ok:true}});}else await route.fulfill({json:[]});});
+ try{
+  await page.reload();await page.locator('[data-nav="soulseek"]').click();
+  await page.locator('#soulseek-query').fill('Shared Album');
+  await page.locator('#soulseek-query').press('Enter');
+  await page.locator('[data-action="stop-search"]').waitFor({state:'visible'});
+  await page.locator('#search-format').waitFor({state:'visible'});
+  // A null response body is a valid unchanged revision; stopping retains displayed results.
+  releaseFirst();
+  await page.locator('.search-file').first().waitFor({state:'attached'});
+  await page.locator('#search-format').selectOption('lossless');
+  for(const sort of ['speed','queue','name','files','size'])await page.locator('#search-sort').selectOption(sort);
+  await page.locator('#search-sort').selectOption('speed');
+  await page.locator('#search-slots').check();
+  await page.locator('#search-filter').fill('CD1');
+  await pause(180);
+  const shown=page.locator('.search-file');
+  assert.equal(await shown.count(),2);
+  assert.match(await page.locator('.search-visible').textContent(),/2 matching files/);
+  assert.match(await page.locator('#search-results').textContent(),/3:32/);
+  assert.match(await page.locator('#search-results').textContent(),/1000 kbps/);
+  assert.match(await page.locator('#search-results').textContent(),/24 bit/);
+  assert.equal(await page.locator('.tree-branch').first().locator(':scope > summary .tree-label').textContent(),'Able Peer');
+  // Filtered folder download keeps the original nested remote paths and excludes MP3/CD2.
+  const album=page.locator('.tree-branch').filter({has:page.locator(':scope > summary > .tree-label', {hasText:'Shared Album'})}).first();
+  await album.locator(':scope > summary').click();
+  await album.locator(':scope > summary [data-download-tree]').click();
+  await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('2 files queued'));
+  assert.deepEqual(downloads,[{username:'Able Peer',files:[
+   {filename:'Music\\Shared Album\\CD1\\01 Song.flac',size:14000000},
+   {filename:'Music\\Shared Album\\CD1\\02 Bonus.wav',size:5000000},
+  ]}]);
+  await album.locator('summary').filter({has:page.locator(':scope > .tree-label',{hasText:'CD1'})}).click();
+  await shown.first().waitFor({state:'visible'});
+  assert.match(await shown.first().innerText(),/24 bit.*96 kHz/);
+  // An unchanged poll sends its revision, then the next response is held while Stop invalidates it.
+  await secondPoll;
+  assert.ok(gets.includes('r:f:l'),'subsequent poll sends the server revision');
+  await thirdPoll;
+  assert.equal(gets.length,3,'the third request starts only after the second poll completed');
+  await page.locator('[data-action="stop-search"]').click();
+  releaseStale();await pause(120);
+  assert.equal(puts.length,1);
+  assert.equal(await page.locator('.search-file').count(),2,'Stop retains the current result tree');
+  assert.doesNotMatch(await page.locator('#search-results').textContent(),/Stale Peer/,'a stale response cannot restore results after Stop');
+  await page.waitForFunction(()=>!document.querySelector('#toast').classList.contains('visible'));
+  await fs.mkdir('output/playwright',{recursive:true});
+  await page.setViewportSize({width:1440,height:1000});
+  await page.screenshot({path:'output/playwright/soulseek-search-desktop.png',fullPage:true,animations:'disabled'});
+  await page.setViewportSize({width:390,height:844});
+  await page.screenshot({path:'output/playwright/soulseek-search-mobile.png',fullPage:true,animations:'disabled'});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'mobile search layout must not overflow');
+  assert.deepEqual(errors,[]);
+ }finally{
+  releaseFirst();releaseStale();
+  await page.unroute('**/api/system');await page.unroute('**/api/soulseek/searches');await page.unroute('**/api/soulseek/searches/*');await page.unroute('**/api/soulseek/downloads');
+ }
+});
+
 test('task rejection and cleanup use real task state and history renders a filtered timeline',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  // Seed only the disposable test application's database, never an archive.
@@ -211,7 +298,7 @@ test('task rejection and cleanup use real task state and history renders a filte
   let log='';child.stderr.on('data',data=>log+=data);child.on('exit',code=>code?reject(new Error(log)):resolve());
  });
  await page.locator('[data-nav="jobs"]').click();await page.locator('[data-show-plan]').click();await page.locator('#modal [data-cancel-job]').click();
- await page.locator('#modal').waitFor({state:'hidden'});assert.match(await page.locator('.job-card').textContent(),/Cancelled/);
+ await page.locator('#modal').waitFor({state:'hidden'});await page.locator('.job-card').getByText('Cancelled',{exact:true}).waitFor();assert.match(await page.locator('.job-card').textContent(),/Cancelled/);
  await page.locator('[data-action="clear-jobs"]').click();await page.locator('.jobs-list').waitFor({state:'detached'});
  await page.locator('[data-nav="history"]').click();await page.locator('.history-timeline').first().waitFor();
  await page.locator('#history-filter').selectOption('delete');assert.match(await page.locator('.history-event').first().textContent(),/Deleted/);
