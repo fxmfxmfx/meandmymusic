@@ -115,6 +115,7 @@ def create_app(settings=None):
     uploads = Uploads(settings)
     library_stats = LibraryStats(settings)
     soulseek = Soulseek(settings)
+    download_lock = asyncio.Lock()
     account = SoulseekAccount(settings, soulseek)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beets")
     secret_path = settings.state / "session.key"
@@ -549,9 +550,29 @@ def create_app(settings=None):
 
     @app.post("/api/soulseek/downloads")
     async def download(data: Download):
-        result = await soulseek.request("POST", f"/transfers/downloads/{segment(data.username)}", [file.model_dump() for file in data.files])
-        store.event("download", {"username": data.username, "files": len(data.files)})
-        return {"ok": True, "result": result}
+        async with download_lock:
+            transfers = await soulseek.request("GET", "/transfers/downloads")
+            if not isinstance(transfers, list):
+                raise HTTPException(502, "Could not verify existing downloads. No files were queued.")
+            existing = {file.get('filename'): file for peer in transfers if peer.get('username') == data.username
+                        for directory in peer.get('directories', []) for file in directory.get('files', [])}
+            pending = {}
+            for file in data.files:
+                old = existing.get(file.filename)
+                flags = {part.strip().casefold() for part in str((old or {}).get('state', '')).split(',')}
+                retryable = bool(flags & {'cancelled', 'canceled', 'errored', 'rejected', 'aborted', 'timedout'})
+                if old and not retryable:
+                    if old.get('size') != file.size:
+                        raise HTTPException(409, "An existing download has a different size. Review it in Downloads first.")
+                    continue
+                if file.filename in pending and pending[file.filename]['size'] != file.size:
+                    raise HTTPException(409, "Conflicting sizes for the same remote file.")
+                pending[file.filename] = file.model_dump()
+            result = None
+            if pending:
+                result = await soulseek.request("POST", f"/transfers/downloads/{segment(data.username)}", list(pending.values()))
+                store.event("download", {"username": data.username, "files": len(pending)})
+            return {"ok": True, "result": result, "queued": len(pending), "existing": len(data.files) - len(pending)}
 
     @app.get("/api/soulseek/downloads")
     async def downloads():

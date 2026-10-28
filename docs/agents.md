@@ -65,6 +65,9 @@ an actual target album and edition; a new reissue is not necessarily a new album
    check formats, track count, sizes, quality and availability.
 3. Save the exact returned `filename` and `size` values in a JSON manifest, then
    call `download`. Never invent remote paths or file sizes.
+   Repeated requests preserve existing active and successful transfers from the
+   same peer. The response reports `queued` and `existing` counts; failed or
+   cancelled transfers can be retried.
 4. Wait for every selected transfer to complete successfully. Do not import an
    incomplete or failed download.
 5. Use `ls --root inbox` to find the actual local album folder. Do not assume its

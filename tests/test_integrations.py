@@ -8,6 +8,8 @@ def test_soulseek_adapter_contract(auth, monkeypatch):
     calls = []
     async def request(self, method, path, data=None):
         calls.append((method, path, data))
+        if method == 'GET' and path == '/transfers/downloads':
+            return []
         return {"id": "f3782ee1-5cd2-45d8-936e-57fd18216b21"}
     monkeypatch.setattr(Soulseek, "request", request)
     assert auth.post("/api/soulseek/searches", json={"query": "Test Artist"}).status_code == 200
@@ -15,6 +17,42 @@ def test_soulseek_adapter_contract(auth, monkeypatch):
     assert auth.post("/api/soulseek/downloads", json={"username": "user name", "files": [{"filename": "Music\\song.flac", "size": 123}]}).status_code == 200
     assert calls[-1] == ("POST", "/transfers/downloads/user%20name", [{"filename": "Music\\song.flac", "size": 123}])
     assert auth.post("/api/soulseek/downloads", json={"username": "user", "files": []}).status_code == 422
+
+
+def test_download_request_preserves_active_and_successful_transfers(auth, monkeypatch):
+    from app.integrations import Soulseek
+    records = [{"filename": "Album/1.flac", "size": 10, "state": "Queued, Remotely"},
+               {"filename": "Album/2.flac", "size": 20, "state": "Completed, Succeeded"}]
+    posted = []
+    async def request(self, method, path, data=None):
+        if method == 'GET':
+            return [{"username": "Peer", "directories": [{"files": records}]}]
+        posted.append(data)
+        records.extend({**f, 'state': 'Queued, Locally'} for f in data)
+        return {}
+    monkeypatch.setattr(Soulseek, 'request', request)
+    body = {'username': 'Peer', 'files': [{'filename': f'Album/{i}.flac', 'size': i * 10} for i in range(1, 4)]}
+    first = auth.post('/api/soulseek/downloads', json=body)
+    second = auth.post('/api/soulseek/downloads', json=body)
+    assert first.json()['queued'] == 1 and second.json()['queued'] == 0
+    assert posted == [[{'filename': 'Album/3.flac', 'size': 30}]]
+    assert records[1]['state'] == 'Completed, Succeeded'
+
+
+def test_failed_download_can_be_retried_but_changed_active_size_is_rejected(auth, monkeypatch):
+    from app.integrations import Soulseek
+    posted = []
+    async def request(self, method, path, data=None):
+        if method == 'GET':
+            return [{'username': 'Peer', 'directories': [{'files': [
+                {'filename': 'Album/1.flac', 'size': 10, 'state': 'Completed, Cancelled'},
+                {'filename': 'Album/2.flac', 'size': 20, 'state': 'Queued, Remotely'}]}]}]
+        posted.append(data)
+        return {}
+    monkeypatch.setattr(Soulseek, 'request', request)
+    assert auth.post('/api/soulseek/downloads', json={'username': 'Peer', 'files': [{'filename': 'Album/1.flac', 'size': 10}]}).json()['queued'] == 1
+    assert auth.post('/api/soulseek/downloads', json={'username': 'Peer', 'files': [{'filename': 'Album/2.flac', 'size': 21}]}).status_code == 409
+    assert len(posted) == 1
 
 
 def test_search_trims_and_rejects_short_queries_before_request(auth, monkeypatch):

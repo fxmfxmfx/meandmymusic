@@ -425,10 +425,10 @@ async function stopSearch(){
 async function downloadFiles(group,files){
  const unique=[...new Map(files.map(file=>[file.filename,file])).values()];let queued=0;
  // The API accepts at most 500 files per request; large branches use batches.
- try{for(let i=0;i<unique.length;i+=500){const batch=unique.slice(i,i+500);await api('/soulseek/downloads',{method:'POST',body:{username:group.username,files:batch.map(f=>({filename:f.filename,size:f.size}))}});queued+=batch.length;}}
+ try{for(let i=0;i<unique.length;i+=500){const batch=unique.slice(i,i+500),result=await api('/soulseek/downloads',{method:'POST',body:{username:group.username,files:batch.map(f=>({filename:f.filename,size:f.size}))}});queued+=Number.isInteger(result.queued)?result.queued:batch.length;}}
  catch(error){throw new Error(`${queued?`${queued} files queued before the error. `:''}${error.message}`);}
- if(unique.length>1)state.downloadBatches.set(JSON.stringify([group.username,...unique.map(f=>f.filename).sort()]),{username:group.username,files:unique.map(f=>f.filename),name:group.user?`Files from ${group.username}`:group.name||basename(group.folder||'Files')});
- toast(`${queued} files queued. See Downloads for progress.`);loadTransfers(true).catch(()=>{});
+ if(queued&&unique.length>1)state.downloadBatches.set(JSON.stringify([group.username,...unique.map(f=>f.filename).sort()]),{username:group.username,files:unique.map(f=>f.filename),name:group.user?`Files from ${group.username}`:group.name||basename(group.folder||'Files')});
+ toast(queued?`${queued} files queued. See Downloads for progress.`:'These files are already in Downloads.');loadTransfers(true).catch(()=>{});
 }
 function transferStatus(file){
  const value=String(file.state||'');
