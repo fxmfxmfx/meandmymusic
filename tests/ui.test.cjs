@@ -398,6 +398,97 @@ test('unchanged Soulseek poll keeps result DOM and a late response cannot restor
  }finally{f.close();}
 });
 
+test('empty Soulseek searches replace waiting state on completion and stop',async()=>{
+ let polls=0;
+ const f=await fixture(true,null,{}, {
+  searchResponse:async()=>++polls===2
+   ?{search:{isComplete:true},responses:null,revision:'0:0:0'}
+   :{search:{isComplete:false},responses:[],revision:'0:0:0'}
+ });
+ try{
+  f.click('[data-nav="soulseek"]');await tick();
+  f.window.document.querySelector('#soulseek-query').value='empty album';f.submit('#soulseek-form');await tick();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  assert.ok(f.window.document.querySelector('#search-status .spinner'));
+  await f.window.testPollSearch();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/No results/);
+  assert.doesNotMatch(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  assert.equal(f.window.document.querySelector('#search-status .spinner'),null);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Search complete/);
+  f.window.document.querySelector('#soulseek-query').value='stopped empty';f.submit('#soulseek-form');await tick();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  f.click('[data-action="stop-search"]');await tick();
+  assert.doesNotMatch(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  assert.equal(f.window.document.querySelector('#search-status .spinner'),null);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Stopped/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('a fresh Soulseek search renders files when the first empty poll is followed by results',async()=>{
+ let polls=0;
+ const f=await fixture(true,null,{}, {searchResponse:async()=>++polls===1
+  ?{search:{isComplete:false},responses:[],revision:null}
+  :{search:{isComplete:true},responses:[{username:'Late Peer',files:[{filename:'Music\\Album\\01.flac',size:10}]}],revision:null}});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();
+  f.window.document.querySelector('#soulseek-query').value='late album';f.submit('#soulseek-form');await tick();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  await f.window.testPollSearch();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Late Peer/);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Search complete/);
+  assert.equal(f.window.document.querySelector('#search-status .spinner'),null);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('a terminal Soulseek status waits for its delayed full file snapshot',async()=>{
+ const sinceValues=[];
+ let polls=0;
+ const f=await fixture(true,null,{}, {searchResponse:async(id,calls)=>{
+  const call=calls.at(-1);sinceValues.push(call.params?.get('since')??null);
+  polls++;
+  if(polls===1)return {search:{id,state:'InProgress',responseCount:1,fileCount:1,lockedFileCount:0},responses:[],revision:null};
+  if(polls===2)return {search:{id,state:'Completed, TimedOut',responseCount:1,fileCount:1,lockedFileCount:0},responses:[],revision:null};
+  return {search:{id,state:'Completed, TimedOut',responseCount:1,fileCount:1,lockedFileCount:0},responses:[{username:'Delayed Peer',files:[{filename:'Music\\Album\\01.flac',size:10}]}],revision:'1:1:0'};
+ }});
+ try{
+  f.click('[data-nav="soulseek"]');await tick();
+  f.window.document.querySelector('#soulseek-query').value='delayed album';f.submit('#soulseek-form');await tick();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  await f.window.testPollSearch();
+  assert.deepEqual(sinceValues,[null,null]);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Searching/);
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  await f.window.testPollSearch();
+  assert.deepEqual(sinceValues,[null,null,null],'an unverified partial snapshot must keep polling without a cursor');
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Delayed Peer/);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Search complete/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('a terminal Soulseek result with a missing snapshot eventually offers retry',async()=>{
+ let now=1_700_000_000_000,polls=0;
+ const f=await fixture(true,null,{}, {searchResponse:async(id)=>{
+  polls++;
+  return {search:{id,state:polls===1?'InProgress':'Completed, TimedOut',responseCount:1,fileCount:1,lockedFileCount:0},responses:[],revision:null};
+ }});
+ try{
+  f.window.Date.now=()=>now;
+  f.click('[data-nav="soulseek"]');await tick();
+  f.window.document.querySelector('#soulseek-query').value='missing snapshot';f.submit('#soulseek-form');await tick();
+  await f.window.testPollSearch();
+  assert.match(f.window.document.querySelector('#search-results').textContent,/Waiting for results/);
+  now+=10_001;
+  await f.window.testPollSearch();
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Search interrupted/);
+  assert.match(f.window.document.querySelector('#search-status').textContent,/Retry/);
+  assert.doesNotMatch(f.window.document.querySelector('#search-results').textContent,/No results/);
+  assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
 test('failed Soulseek polls show a retry action and retry can recover',async()=>{
  let polls=0;
  const f=await fixture(true,null,{}, {

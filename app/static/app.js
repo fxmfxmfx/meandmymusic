@@ -2,7 +2,7 @@
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
 const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
-Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0});
+Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0,searchReceivedFiles:0,searchFinishWaitStarted:null});
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
  folder:'<path d="M3 7V5a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/>',
@@ -330,7 +330,9 @@ function renderSearchResults(){
  const el=document.querySelector('#search-results');if(!el)return;
  renderSearchStatus();
  if(!state.searchId){el.innerHTML=state.searchPhase==='starting'?'<div class="loading">Waiting for search results…</div>':`<div class="empty">${icon('search')}<h3>Search for music</h3><p>Enter an artist, album or track name.</p></div>`;return;}
- const signature=JSON.stringify([state.searchVersion,state.searchFilter,state.searchFormat,state.searchSlots,state.searchSort,state.searchLimit]);
+ // Empty placeholders depend on completion even when no new files arrive.
+ const emptyPhase=state.groups.length?'':state.searchPhase==='error'?'error':state.searchDone?'done':'waiting';
+ const signature=JSON.stringify([state.searchVersion,state.searchFilter,state.searchFormat,state.searchSlots,state.searchSort,state.searchLimit,emptyPhase]);
  // Unchanged polls must preserve native details, focus and in-progress clicks.
  if(state.searchRenderedElement===el&&state.searchRenderedSignature===signature)return;
  rememberTree('search');state.searchRenderedElement=el;state.searchRenderedSignature=signature;
@@ -349,7 +351,7 @@ function renderSearchResults(){
   const meta=`${searchCount(node.files.length,'file')} · ${size(node.files.reduce((sum,f)=>sum+(Number(f.size)||0),0))}<small>${esc(node.user?`${availability}${peer.speed?` · ${size(peer.speed)}/s`:''}`:formats)}</small>`;
   return treeBranch('search',node,depth,body,`<button class="small primary" data-download-tree="${nodeId}" aria-label="Download ${node.user?'all results from':'folder'} ${esc(node.name)}">${icon('download')}<span>${node.user?'Download all':'Download folder'}</span></button>`,meta);
  };
- el.innerHTML=`<p class="search-visible">${searchCount(files.length,'matching file')} · ${searchCount(users.length,'user')}${users.length>state.searchLimit?` · showing ${state.searchLimit}`:''}${state.searchFilter||state.searchFormat!=='all'||state.searchSlots?' · Folder downloads include filtered files only.':''}</p>`+(users.length?`<div class="remote-tree" data-tree-scope="search">${users.slice(0,state.searchLimit).map(n=>render(n,0)).join('')}</div>${users.length>state.searchLimit?'<button class="search-more" data-action="more-search-results">Show more users</button>':''}`:`<div class="empty"><h3>${state.groups.length?'No results in this filter':state.searchDone?'No results':'Waiting for results…'}</h3><p>${state.groups.length?'Change the filters to see more files.':state.searchDone?'Try fewer search terms or check your Soulseek connection.':'Users may take a few seconds to respond.'}</p></div>`);
+ el.innerHTML=`<p class="search-visible">${searchCount(files.length,'matching file')} · ${searchCount(users.length,'user')}${users.length>state.searchLimit?` · showing ${state.searchLimit}`:''}${state.searchFilter||state.searchFormat!=='all'||state.searchSlots?' · Folder downloads include filtered files only.':''}</p>`+(users.length?`<div class="remote-tree" data-tree-scope="search">${users.slice(0,state.searchLimit).map(n=>render(n,0)).join('')}</div>${users.length>state.searchLimit?'<button class="search-more" data-action="more-search-results">Show more users</button>':''}`:`<div class="empty"><h3>${state.groups.length?'No results in this filter':emptyPhase==='error'?'Results unavailable':state.searchDone?'No results':'Waiting for results…'}</h3><p>${state.groups.length?'Change the filters to see more files.':emptyPhase==='error'?'Retry to refresh this search.':state.searchDone?'Try fewer search terms or check your Soulseek connection.':'Users may take a few seconds to respond.'}</p></div>`);
 }
 function invalidateSearch(){clearTimeout(state.searchTimer);state.searchTimer=null;state.searchEpoch++;state.searchRequest=null;}
 async function pollSearch(){
@@ -359,11 +361,21 @@ async function pollSearch(){
  try{
   const data=await api(`/soulseek/searches/${id}${state.searchRevision==null?'':`?since=${encodeURIComponent(state.searchRevision)}`}`);
   if(id!==state.searchId||epoch!==state.searchEpoch)return;
-  if(Array.isArray(data.responses)){const groups=normalizeResults(data.responses),snapshot=JSON.stringify(groups);if(snapshot!==state.searchSnapshot){state.groups=groups;state.searchSnapshot=snapshot;state.searchVersion++;}}
+  if(Array.isArray(data.responses)){
+   state.searchReceivedFiles=data.responses.reduce((n,response)=>n+(Array.isArray(response.files)?response.files.length:0),0);
+   const groups=normalizeResults(data.responses),snapshot=JSON.stringify(groups);if(snapshot!==state.searchSnapshot){state.groups=groups;state.searchSnapshot=snapshot;state.searchVersion++;}
+  }
   state.searchRevision=data.revision??null;
   const status=String(data.search.state||'');
   state.searchDone=data.search.isComplete===true||/Completed|Cancelled|TimedOut|Errored/i.test(status);
   state.searchFailedTerminal=/Errored/i.test(status);
+  // slskd can publish completion and counters before saving its response list.
+  const awaitingResults=state.searchDone&&!/Cancelled|Errored/i.test(status)&&Number.isInteger(data.search.fileCount)&&data.search.fileCount>state.searchReceivedFiles;
+  if(awaitingResults){
+   state.searchFinishWaitStarted??=Date.now();state.searchRevision=null;
+   if(Date.now()-state.searchFinishWaitStarted>=10000)throw new Error('Search results are still being prepared. Retry to refresh them.');
+   state.searchDone=false;
+  }else state.searchFinishWaitStarted=null;
   state.searchPhase=state.searchFailedTerminal?'error':/Cancelled/i.test(status)?'stopped':state.searchDone?'complete':'searching';
   state.searchError=state.searchFailedTerminal?'The remote search ended with an error. Retry to start a new search. Results found so far are kept.':null;
   if(state.page==='soulseek')renderSearchResults();
@@ -381,7 +393,7 @@ async function discardSearch(id){
 async function startSearch(value){
  const text=String(value).trim();if(text.length<2||text.length>300)throw new Error('Enter between 2 and 300 characters');
  const oldId=state.searchId,oldActive=oldId&&!state.searchDone;invalidateSearch();const epoch=state.searchEpoch;
- state.searchQuery=text;state.searchId=null;state.groups=[];state.searchDone=false;state.searchPhase='starting';state.searchError=null;state.searchFailedTerminal=false;state.searchRevision=null;state.searchSnapshot=null;state.searchVersion++;state.searchLimit=25;
+ state.searchQuery=text;state.searchId=null;state.groups=[];state.searchDone=false;state.searchPhase='starting';state.searchError=null;state.searchFailedTerminal=false;state.searchRevision=null;state.searchSnapshot=null;state.searchVersion++;state.searchLimit=25;state.searchReceivedFiles=0;state.searchFinishWaitStarted=null;
  for(const key of state.treeOpen.keys())if(key.startsWith('["search",'))state.treeOpen.delete(key);
  if(state.page==='soulseek')renderSoulseek();
  // Releasing the previous search must not delay the next network search.
@@ -790,7 +802,7 @@ document.addEventListener('click',async event=>{
   else if(action==='soulseek-forget'){button.disabled=true;await api('/soulseek/auth/saved',{method:'DELETE'});await refreshAccount();toast('Saved account removed.');}
   else if(action==='soulseek-reconnect'){button.disabled=true;state.accountBusy=true;try{await api('/soulseek/auth/reconnect',{method:'POST'});}finally{state.accountBusy=false;await refreshAccount();}}
   else if(action==='stop-search')await stopSearch();
-  else if(action==='retry-search'){if(state.searchId&&!state.searchFailedTerminal){invalidateSearch();state.searchDone=false;state.searchError=null;state.searchPhase='searching';renderSearchStatus();await pollSearch();}else await startSearch(state.searchQuery);}
+  else if(action==='retry-search'){if(state.searchId&&!state.searchFailedTerminal){invalidateSearch();state.searchDone=false;state.searchError=null;state.searchPhase='searching';state.searchFinishWaitStarted=null;renderSearchStatus();await pollSearch();}else await startSearch(state.searchQuery);}
   else if(action==='more-search-results'){state.searchLimit+=25;renderSearchResults();}
  }catch(error){toast(error.message,true);}finally{if(button.isConnected)button.disabled=false;}
 });

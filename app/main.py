@@ -497,10 +497,38 @@ def create_app(settings=None):
         counters = ("responseCount", "fileCount", "lockedFileCount")
         values = [status.get(key) if isinstance(status, dict) else None for key in counters]
         valid_counters = all(type(value) is int and value >= 0 for value in values)
-        revision = ":".join(str(value) for value in values) if valid_counters else None
-        if valid_counters and since == revision:
+        revision = f"v2:{':'.join(str(value) for value in values)}" if valid_counters else None
+        terminal_states = {"completed", "cancelled", "timedout", "errored"}
+        terminal = isinstance(status, dict) and (
+            status.get("isComplete") is True
+            or any(
+                isinstance(status.get(key), str)
+                and any(
+                    flag.strip().casefold() in terminal_states
+                    for flag in status[key].split(",")
+                )
+                for key in ("state", "status")
+            )
+        )
+        if valid_counters and since == revision and not terminal:
+            # Skip only after an earlier response snapshot established that
+            # these counters describe a complete payload.
             return {"search": status, "responses": None, "revision": revision}
         responses = await soulseek.request("GET", f"/searches/{search_id}/responses")
+        valid_snapshot = isinstance(responses, list) and all(
+            isinstance(response, dict)
+            and isinstance(response.get("files"), list)
+            and ("lockedFiles" not in response or isinstance(response["lockedFiles"], list))
+            for response in responses
+        )
+        if valid_counters and valid_snapshot:
+            actual_counts = [
+                len(responses),
+                sum(len(response["files"]) for response in responses),
+                sum(len(response.get("lockedFiles", [])) for response in responses),
+            ]
+            valid_snapshot = actual_counts == values
+        revision = revision if valid_counters and valid_snapshot else None
         return {"search": status, "responses": responses, "revision": revision}
 
     @app.put("/api/soulseek/searches/{search_id}")

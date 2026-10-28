@@ -39,17 +39,21 @@ def test_search_revision_skips_unchanged_responses(auth, monkeypatch):
     from app.integrations import Soulseek
     search_id = "f3782ee1-5cd2-45d8-936e-57fd18216b21"
     calls = []
+    responses = [
+        {"username": "peer-a", "files": [{}, {}, {}], "lockedFiles": [{}]},
+        {"username": "peer-b", "files": [{}, {}, {}, {}]},
+    ]
     async def request(self, method, path, data=None):
         calls.append((method, path))
-        return {"responseCount": 2, "fileCount": 7, "lockedFileCount": 1} if path == f"/searches/{search_id}" else []
+        return {"responseCount": 2, "fileCount": 7, "lockedFileCount": 1} if path == f"/searches/{search_id}" else responses
     monkeypatch.setattr(Soulseek, "request", request)
 
-    response = auth.get(f"/api/soulseek/searches/{search_id}?since=2:7:1")
+    response = auth.get(f"/api/soulseek/searches/{search_id}?since=v2:2:7:1")
     assert response.status_code == 200
     assert response.json() == {
         "search": {"responseCount": 2, "fileCount": 7, "lockedFileCount": 1},
         "responses": None,
-        "revision": "2:7:1",
+        "revision": "v2:2:7:1",
     }
     assert calls == [("GET", f"/searches/{search_id}")]
 
@@ -59,7 +63,7 @@ def test_search_revision_fetches_full_responses_when_changed_or_initial(auth, mo
     search_id = "f3782ee1-5cd2-45d8-936e-57fd18216b21"
     calls = []
     status = {"responseCount": 0, "fileCount": 0, "lockedFileCount": 0}
-    responses = [{"username": "peer", "files": []}]
+    responses = []
     async def request(self, method, path, data=None):
         calls.append((method, path))
         return status if path == f"/searches/{search_id}" else responses
@@ -68,15 +72,84 @@ def test_search_revision_fetches_full_responses_when_changed_or_initial(auth, mo
     first = auth.get(f"/api/soulseek/searches/{search_id}")
     assert first.status_code == 200
     assert first.json()["responses"] == responses
-    assert first.json()["revision"] == "0:0:0"
+    assert first.json()["revision"] == "v2:0:0:0"
     assert calls == [("GET", f"/searches/{search_id}"), ("GET", f"/searches/{search_id}/responses")]
 
     calls.clear()
+    responses.append({"username": "peer", "files": [{}, {}]})
     status.update(responseCount=1, fileCount=2)
-    changed = auth.get(f"/api/soulseek/searches/{search_id}?since=0:0:0")
+    changed = auth.get(f"/api/soulseek/searches/{search_id}?since=v2:0:0:0")
     assert changed.json()["responses"] == responses
-    assert changed.json()["revision"] == "1:2:0"
+    assert changed.json()["revision"] == "v2:1:2:0"
     assert calls[-1] == ("GET", f"/searches/{search_id}/responses")
+
+
+def test_search_revision_is_unavailable_when_response_snapshot_is_stale_or_invalid(auth, monkeypatch):
+    from app.integrations import Soulseek
+    search_id = "f3782ee1-5cd2-45d8-936e-57fd18216b21"
+    status = {"responseCount": 1, "fileCount": 2, "lockedFileCount": 1}
+    responses = []
+    calls = []
+    async def request(self, method, path, data=None):
+        calls.append(path)
+        return status if path == f"/searches/{search_id}" else responses
+    monkeypatch.setattr(Soulseek, "request", request)
+
+    # slskd can publish counters before its response endpoint catches up.
+    empty = auth.get(f"/api/soulseek/searches/{search_id}?since=1:2:1")
+    assert empty.json()["responses"] == []
+    assert empty.json()["revision"] is None
+    assert calls == [f"/searches/{search_id}", f"/searches/{search_id}/responses"]
+
+    # Partial results cannot establish the counters either.
+    responses[:] = [{"username": "peer", "files": [{}], "lockedFiles": []}]
+    partial = auth.get(f"/api/soulseek/searches/{search_id}")
+    assert partial.json()["responses"] == responses
+    assert partial.json()["revision"] is None
+
+    # Once the full snapshot arrives with matching counters, the revision is usable.
+    responses[:] = [{"username": "peer", "files": [{}, {}], "lockedFiles": [{}]}]
+    full = auth.get(f"/api/soulseek/searches/{search_id}")
+    assert full.json()["responses"] == responses
+    assert full.json()["revision"] == "v2:1:2:1"
+
+    responses[:] = [{"username": "peer", "files": "malformed"}]
+    malformed = auth.get(f"/api/soulseek/searches/{search_id}")
+    assert malformed.json()["responses"] == responses
+    assert malformed.json()["revision"] is None
+    assert len(calls) == 8
+
+
+def test_terminal_search_forces_response_fetch_even_when_revision_matches(auth, monkeypatch):
+    from app.integrations import Soulseek
+    search_id = "f3782ee1-5cd2-45d8-936e-57fd18216b21"
+    calls = []
+    responses = [{"username": "peer", "files": [{}]}]
+    status = {"responseCount": 1, "fileCount": 1, "lockedFileCount": 0, "state": "Completed, TimedOut"}
+    async def request(self, method, path, data=None):
+        calls.append(path)
+        return status if path == f"/searches/{search_id}" else responses
+    monkeypatch.setattr(Soulseek, "request", request)
+
+    response = auth.get(f"/api/soulseek/searches/{search_id}?since=v2:1:1:0")
+    assert response.json()["responses"] == responses
+    assert response.json()["revision"] == "v2:1:1:0"
+    assert calls == [f"/searches/{search_id}", f"/searches/{search_id}/responses"]
+
+    # A terminal flag remains meaningful even when isComplete is omitted.
+    calls.clear()
+    status["state"] = "TimedOut, Completed"
+    response = auth.get(f"/api/soulseek/searches/{search_id}?since=v2:1:1:0")
+    assert response.json()["responses"] == responses
+    assert calls == [f"/searches/{search_id}", f"/searches/{search_id}/responses"]
+
+    # isComplete also forces the final fetch if the state field is absent.
+    calls.clear()
+    status.pop("state")
+    status["isComplete"] = True
+    response = auth.get(f"/api/soulseek/searches/{search_id}?since=v2:1:1:0")
+    assert response.json()["responses"] == responses
+    assert calls == [f"/searches/{search_id}", f"/searches/{search_id}/responses"]
 
 
 def test_search_revision_missing_counters_disables_optimization(auth, monkeypatch):

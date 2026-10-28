@@ -35,6 +35,18 @@ Soulseek credentials use an interactive prompt or `MMM_SOULSEEK_PASSWORD`.
 `--no-save` avoids persisting a remembered account. Do not pass passwords as
 command-line arguments or publish environment files.
 
+When polling `GET /api/soulseek/searches/SEARCH_UUID`, the optional `since`
+parameter accepts a previously received opaque `revision`. `responses: null` means
+that the delivered snapshot is unchanged; keep the existing files. A null
+revision means the snapshot cannot yet be reused. Omitting `since` requests the
+full snapshot, and terminal polls always fetch it.
+
+slskd 0.26.2 can publish file counts and completion before saving the file list.
+If `search.fileCount` exceeds the number of files received, fetch again without
+`since` before declaring the results complete. The browser waits up to ten
+additional seconds for publication, then offers Retry while keeping any files
+already received.
+
 ## Download/import workflow
 
 An agent needs the owner's selection criteria and authorized actions. Determine

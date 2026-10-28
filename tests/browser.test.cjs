@@ -290,6 +290,64 @@ test('Soulseek search filters, revision polling, stop and filtered nested downlo
  }
 });
 
+test('a completed empty Soulseek search clears the waiting state in the browser',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ let polls=0;
+ await page.route('**/api/system',route=>route.fulfill({json:{slskd:true,slskd_configured:true}}));
+ const emptySearchId='ae6ee0b0-7ec4-4f75-b47a-413d3569d540';
+ await page.route('**/api/soulseek/searches',route=>route.fulfill({json:{id:emptySearchId}}));
+ await page.route(`**/api/soulseek/searches/${emptySearchId}*`,route=>{
+  polls++;
+  return route.fulfill({json:polls===1
+   ?{search:{id:emptySearchId,isComplete:false},responses:[],revision:'0:0:0'}
+   :{search:{id:emptySearchId,isComplete:true},responses:null,revision:'0:0:0'}});
+ });
+ try{
+  await page.reload();await page.locator('[data-nav="soulseek"]').click();
+  await page.locator('#soulseek-query').fill('empty album');
+  await page.locator('#soulseek-form button[type="submit"]').click();
+  await page.locator('#search-results').getByText('Waiting for results…').waitFor();
+  await page.getByText('Search complete',{exact:true}).waitFor({timeout:10000});
+  await fs.mkdir('output/playwright',{recursive:true});
+  await page.screenshot({path:'output/playwright/soulseek-empty-complete.png',fullPage:true,animations:'disabled'});
+  assert.match(await page.locator('#search-results').textContent(),/No results/);
+  assert.doesNotMatch(await page.locator('#search-results').textContent(),/Waiting for results/);
+  assert.equal(await page.locator('#search-status .spinner').count(),0);
+  assert.deepEqual(errors,[]);
+ }finally{
+  await page.unroute('**/api/system');await page.unroute('**/api/soulseek/searches');await page.unroute(`**/api/soulseek/searches/${emptySearchId}*`);
+ }
+});
+
+test('a fresh Soulseek search renders the final file snapshot after an empty active poll',async()=>{
+ await page.setViewportSize({width:1440,height:1000});
+ let polls=0;
+ const snapshotSearchId='0ebf973b-f692-4b40-8cd8-641997bf55d8';
+ await page.route('**/api/system',route=>route.fulfill({json:{slskd:true,slskd_configured:true}}));
+ await page.route('**/api/soulseek/searches',route=>route.fulfill({json:{id:snapshotSearchId}}));
+ await page.route(`**/api/soulseek/searches/${snapshotSearchId}*`,route=>{
+  polls++;
+  return route.fulfill({json:polls===1
+   ?{search:{id:snapshotSearchId,isComplete:false},responses:[],revision:null}
+   :{search:{id:snapshotSearchId,isComplete:true},responses:[{username:'Late Peer',files:[{filename:'Music\\Album\\01.flac',size:10}]}],revision:null}});
+ });
+ try{
+  await page.reload();await page.locator('[data-nav="soulseek"]').click();
+  await page.locator('#soulseek-query').fill('late album');
+  await page.locator('#soulseek-form button[type="submit"]').click();
+  await page.locator('#search-results').getByText('Waiting for results…').waitFor();
+  await page.locator('#search-results').getByText('Late Peer',{exact:false}).waitFor({timeout:10000});
+  assert.match(await page.locator('#search-results').textContent(),/01\.flac/);
+  assert.match(await page.locator('#search-status').textContent(),/Search complete/);
+  assert.equal(await page.locator('#search-status .spinner').count(),0);
+  await fs.mkdir('output/playwright',{recursive:true});
+  await page.screenshot({path:'output/playwright/soulseek-final-snapshot.png',fullPage:true,animations:'disabled'});
+  assert.deepEqual(errors,[]);
+ }finally{
+  await page.unroute('**/api/system');await page.unroute('**/api/soulseek/searches');await page.unroute(`**/api/soulseek/searches/${snapshotSearchId}*`);
+ }
+});
+
 test('task rejection and cleanup use real task state and history renders a filtered timeline',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  // Seed only the disposable test application's database, never an archive.
