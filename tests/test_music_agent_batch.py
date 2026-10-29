@@ -202,4 +202,3 @@ def test_locked_child_is_skipped_without_changing_its_state(tmp_path, monkeypatc
     assert after["status"] == before["status"] == "waiting"
     assert "error" not in after
     assert result["status"] == "waiting"
-
