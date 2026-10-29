@@ -6,12 +6,13 @@ from uuid import UUID
 
 import httpx
 from fastapi import HTTPException
+from app.music_agent_schema import public_batch
 
 
 UNAVAILABLE = "Music assistant is unavailable. Check the agent service."
 _MODEL_STATES = {"sleeping", "ready", "loading", "unavailable"}
 _PHASES = {"start", "intent", "release", "sources", "source", "queuing", "downloading",
-           "downloaded", "inbox", "matched", "preview", "reviewed", "applying", "importing", "done"}
+           "downloaded", "inbox", "matched", "preview", "reviewed", "applying", "importing", "done", "artist"}
 _STATUSES = {"queued", "running", "waiting", "planned", "needs_review", "done", "superseded", "failed"}
 
 
@@ -58,7 +59,7 @@ def _object(value, fields):
     result = {}
     for key, limit in fields.items():
         item = value.get(key)
-        if key in {"tracks", "files", "bytes", "total_bytes", "expected"}:
+        if key in {"tracks", "files", "bytes", "total_bytes", "expected", "albums"}:
             parsed = _integer(item)
         elif key == "destinations":
             parsed = _string_list(item)
@@ -87,13 +88,15 @@ def _task(value):
     if phase not in _PHASES or status not in _STATUSES:
         return None
     task = {"id": task_id, "phase": phase, "status": status}
+    if isinstance(value.get('batch'), dict):
+        task['batch'] = public_batch(value['batch'])
     if isinstance(value.get("request"), str):
         task["request"] = value["request"][:2000]
     for key, fields in {
         "intent": {"artist": 300, "album": 300},
         "release": {"artist": 300, "title": 300, "date": 40, "tracks": 0, "id": 0},
         "source": {"username": 200, "directory": 1000, "tracks": 0, "total_bytes": 0},
-        "result": {"artist": 300, "album": 300, "files": 0, "destinations": 0, "cleanup": 0},
+        "result": {"artist": 300, "album": 300, "files": 0, "albums": 0, "destinations": 0, "cleanup": 0},
         "transfer": {"bytes": 0, "total_bytes": 0, "files": 0, "expected": 0},
     }.items():
         obj = _object(value.get(key), fields)

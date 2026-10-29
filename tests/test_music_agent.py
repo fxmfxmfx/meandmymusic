@@ -49,6 +49,18 @@ def test_truncated_model_output_is_not_an_executable_decision():
         model.close()
 
 
+def test_unfamiliar_literal_artist_is_not_rejected_for_missing_model_knowledge():
+    model = agent.LocalModel('http://localhost')
+    model.decision = lambda *args: {'artist': '', 'album': '', 'needs_input': True}
+    try:
+        for request in ['madk1d', 'download all albums of madk1d', 'скачай все альбомы madk1d', 'скачай все альбомы от madk1d']:
+            assert model.intent(request) == {'artist': 'madk1d', 'album': ''}
+        with pytest.raises(AgentError):
+            model.intent('привет')
+    finally:
+        model.close()
+
+
 def test_configuration_must_be_private_and_never_reports_secrets(tmp_path):
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"manager_url": "http://manager", "password": "DO-NOT-PRINT"}))
@@ -170,6 +182,17 @@ def test_uncertain_queue_is_not_repeated(workflow, monkeypatch):
     with pytest.raises(AgentError, match="unknown outcome"):
         agent.run_workflow(task, store, api, model)
     assert "queue" not in calls
+
+
+def test_space_refusal_leaves_queue_checkpoint_retryable(workflow, monkeypatch):
+    task, store, api, model, source, calls = workflow
+    task.update(phase='source', source=source)
+    def refuse(*args):
+        raise agent.InboxSpaceError('Free space and retry.')
+    monkeypatch.setattr(agent, 'queue_source', refuse)
+    with pytest.raises(agent.InboxSpaceError):
+        agent.run_workflow(task, store, api, model)
+    assert store.load(task['id'])['phase'] == 'source'
 
 
 def test_failed_transfer_never_reaches_match(workflow, monkeypatch):

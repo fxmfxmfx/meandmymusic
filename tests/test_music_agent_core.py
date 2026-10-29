@@ -175,6 +175,19 @@ def test_http_failure_never_exposes_upstream_body_or_password():
     finally: api.close()
 
 
+def test_artist_batch_accepts_only_a_complete_recommended_edition_of_same_album():
+    from app.music_agent_core import get_match
+    selected='00000000-0000-0000-0000-000000000001';recommended='00000000-0000-0000-0000-000000000002'
+    release={'id':selected,'artist':'Artist','title':'Album','tracks':1,'accept_recommended_edition':True}
+    candidate={'id':recommended,'artist':'Artist','title':'Album','tracks':1,'missing_tracks':0,'extra_files':0,'confidence':99}
+    class API:
+        def post(self,*args,**kwargs):return {'recommended_release_id':recommended,'candidates':[candidate]}
+    assert get_match(API(),'Inbox',release)['recommended_release_id']==recommended
+    with pytest.raises(AgentError):get_match(API(),'Inbox',{**release,'accept_recommended_edition':False})
+    candidate['artist']='Other artist'
+    with pytest.raises(AgentError):get_match(API(),'Inbox',release)
+
+
 def test_transient_reads_retry_but_queue_is_never_repeated(monkeypatch):
     from app import music_agent_core as core
     monkeypatch.setattr(core.time, "sleep", lambda seconds: None)

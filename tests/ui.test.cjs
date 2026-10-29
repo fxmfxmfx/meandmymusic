@@ -877,6 +877,16 @@ test('Library shows only its total duration and refreshes through the existing b
  }finally{f.close();}
 });
 
+test('artist assistant batches show per-album progress and escape album errors',async()=>{
+ const f=await fixture(true,null,{}, {musicAi:{configured:true,model_state:'sleeping',tasks:[{id:'artist-task',request:'madk1d',phase:'artist',status:'running',batch:{total:2,completed:1,needs_review:1,items:[{id:'child',album:'<img src=x>',phase:'sources',status:'needs_review',error:'<script>bad</script>'}]}}]}});
+ try{
+  f.click('[data-nav="music-ai"]');await tick();
+  assert.match(f.window.document.querySelector('.music-ai-task').textContent,/1 of 2 albums imported/);
+  assert.equal(f.window.document.querySelector('.music-ai-task img'),null);
+  assert.equal(f.window.document.querySelector('.music-ai-task script'),null);
+ }finally{f.close();}
+});
+
 test('late assistant submission cannot clear a new page draft',async()=>{
  let finish;
  const f=await fixture(true,null,{}, {musicAiSubmit:()=>new Promise(resolve=>finish=resolve)});

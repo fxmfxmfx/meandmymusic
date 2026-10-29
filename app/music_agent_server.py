@@ -18,6 +18,7 @@ from uuid import uuid4, UUID
 import httpx
 
 from app.music_agent import TaskStore, load_config
+from app.music_agent_schema import public_batch
 
 
 MAX_BODY = 8192
@@ -25,7 +26,7 @@ MAX_PENDING = 8
 TERMINAL = {"done", "superseded"}
 RETRYABLE = {"needs_review", "waiting", "new", "planned"}
 SAFE_FIELDS = {"id", "request", "phase", "status", "intent", "release", "inbox",
-               "preview_id", "import_id", "result", "error", "error_code", "source", "transfer"}
+               "preview_id", "import_id", "result", "error", "error_code", "source", "transfer", "batch"}
 
 
 def _model_probe(url):
@@ -47,6 +48,8 @@ def _model_probe(url):
 
 def _sanitize(task):
     result = {key: task[key] for key in SAFE_FIELDS if key in task}
+    if 'batch' in result:
+        result['batch'] = public_batch(result['batch'])
 
     def bounded_text(value):
         return value[:500] if isinstance(value, str) else None
@@ -68,7 +71,7 @@ def _sanitize(task):
             elif key == "result":
                 result[key] = {name: bounded_text(value[name]) for name in ("artist", "album")
                                if name in value and isinstance(value[name], str)}
-                result[key].update({name: value[name] for name in ("files", "bytes")
+                result[key].update({name: value[name] for name in ("files", "bytes", "albums")
                                     if name in value and type(value[name]) is int})
                 destinations = value.get("destinations")
                 if isinstance(destinations, list):
@@ -111,6 +114,7 @@ class MusicAgentServer:
         self.capacity = workers + MAX_PENDING
         self.lock = threading.RLock()
         self.pending = 0
+        self.active_ids = set()
         self.recovery = []
         self.closing = False
         self.children = set()
@@ -205,8 +209,20 @@ class MusicAgentServer:
                                           if task.get("origin") == "web" and task.get("request") == request
                                           and task.get("status") not in TERMINAL), None)
                         if duplicate:
+                            task_id = duplicate["id"]
+                            if task_id not in owner.active_ids and task_id not in owner.recovery and duplicate.get("status") in RETRYABLE:
+                                if owner.pending + len(owner.recovery) >= owner.capacity:
+                                    self._reply(409, {"error": "Task queue is full"}); return
+                                duplicate["status"] = "queued"
+                                owner.store.save(duplicate)
+                                if not owner._submit(task_id):
+                                    self._reply(409, {"error": "Task queue is full"}); return
+                            elif task_id not in owner.active_ids and duplicate.get("status") == "queued" and task_id not in owner.recovery:
+                                if owner.pending + len(owner.recovery) >= owner.capacity:
+                                    self._reply(409, {"error": "Task queue is full"}); return
+                                owner._submit(task_id)
                             self._reply(202, _sanitize(duplicate)); return
-                        if owner.pending >= owner.capacity:
+                        if owner.pending + len(owner.recovery) >= owner.capacity:
                             self._reply(503, {"error": "Task queue is full"}); return
                         try:
                             config = load_config(owner.config_path)
@@ -227,15 +243,16 @@ class MusicAgentServer:
                             task = owner.store.load(task_id)
                             if task.get("origin") != "web":
                                 self._reply(404, {"error": "Task not found"}); return
-                            if task.get("status") in {"queued", "running"}:
+                            if task_id in owner.active_ids or task_id in owner.recovery or task.get("status") in {"queued", "running"}:
                                 self._reply(202, _sanitize(task)); return
                             if task.get("status") not in RETRYABLE or task.get("phase") in {"done", "superseded"}:
                                 self._reply(409, {"error": "Task cannot be resumed"}); return
-                            if owner.pending >= owner.capacity:
+                            if owner.pending + len(owner.recovery) >= owner.capacity:
                                 self._reply(409, {"error": "Task queue is full"}); return
                             task["status"] = "queued"
                             owner.store.save(task)
-                            owner._submit(task_id)
+                            if not owner._submit(task_id):
+                                self._reply(409, {"error": "Task queue is full"}); return
                         self._reply(202, _sanitize(task)); return
                     except Exception:
                         self._reply(404, {"error": "Task not found"}); return
@@ -243,15 +260,26 @@ class MusicAgentServer:
         return ThreadingHTTPServer((self.bind, self.port), Handler)
 
     def _submit(self, task_id):
-        if self.pending >= self.capacity: raise RuntimeError("queue full")
+        if task_id in self.active_ids:
+            return False
+        if self.pending >= self.capacity:
+            return False
         self.pending += 1
-        future = self.executor.submit(self._run, task_id)
-        future.add_done_callback(lambda _: self._finished())
+        self.active_ids.add(task_id)
+        try:
+            future = self.executor.submit(self._run, task_id)
+        except Exception:
+            self.active_ids.discard(task_id)
+            self.pending -= 1
+            raise
+        future.add_done_callback(lambda _: self._finished(task_id))
+        return True
 
-    def _finished(self):
+    def _finished(self, task_id):
         with self.lock:
+            self.active_ids.discard(task_id)
             self.pending = max(0, self.pending - 1)
-            if self.recovery and not self.closing:
+            if self.recovery and not self.closing and self.pending < self.capacity:
                 self._submit(self.recovery.pop(0))
 
     def _run(self, task_id):

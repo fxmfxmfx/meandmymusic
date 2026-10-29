@@ -101,3 +101,18 @@ async def test_downloading_phase_and_planned_status_are_allowed():
     task = {"id": task_id, "request": "request", "phase": "downloading", "status": "planned"}
     client = proxy(lambda request: httpx.Response(200, json={"model_state": "loading", "tasks": [task]}))
     assert (await client.status())["tasks"][0]["status"] == "planned"
+
+
+@pytest.mark.asyncio
+async def test_artist_batch_progress_is_public_but_private_fields_are_removed():
+    child_id = str(uuid4())
+    task = {'id': str(uuid4()), 'request': 'madk1d', 'phase': 'artist', 'status': 'running',
+            'batch': {'artist': 'madk1d', 'total': 2, 'completed': 1, 'token': 'secret',
+                      'items': [{'id': child_id, 'album': 'sexyswag', 'phase': 'downloading',
+                                 'status': 'waiting', 'password': 'secret',
+                                 'transfer': {'bytes': 10, 'total_bytes': 100, 'files': 0, 'expected': 9, 'token': 'secret'}}]}}
+    client = proxy(lambda request: httpx.Response(200, json={'model_state': 'sleeping', 'tasks': [task]}))
+    result = (await client.status())['tasks'][0]
+    assert result['batch']['completed'] == 1
+    assert result['batch']['items'][0]['transfer']['expected'] == 9
+    assert 'secret' not in str(result)

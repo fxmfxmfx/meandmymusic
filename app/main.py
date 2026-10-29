@@ -3,6 +3,7 @@ import hashlib
 import hmac
 import os
 import secrets
+import shutil
 import time
 from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
@@ -590,6 +591,19 @@ def create_app(settings=None):
                 pending[file.filename] = file.model_dump()
             result = None
             if pending:
+                reserved = 0
+                for peer in transfers:
+                    for directory in peer.get('directories', []):
+                        for transfer in directory.get('files', []):
+                            flags = {p.strip().casefold() for p in str(transfer.get('state', '')).split(',')}
+                            if flags & {'completed', 'cancelled', 'canceled', 'errored', 'rejected', 'aborted', 'timedout'}:
+                                continue
+                            size, received = transfer.get('size'), transfer.get('bytesTransferred', 0)
+                            if type(size) is int and type(received) is int:
+                                reserved += max(0, size - received)
+                required = reserved + sum(file['size'] for file in pending.values())
+                if required > max(0, shutil.disk_usage(settings.inbox).free - 256 * 1024 ** 2):
+                    raise HTTPException(507, 'Not enough free space in Inbox for these downloads. Free space before retrying.')
                 result = await soulseek.request("POST", f"/transfers/downloads/{segment(data.username)}", list(pending.values()))
                 store.event("download", {"username": data.username, "files": len(pending)})
             return {"ok": True, "result": result, "queued": len(pending), "existing": len(data.files) - len(pending)}
@@ -609,10 +623,12 @@ def create_app(settings=None):
         return await soulseek.request("DELETE", f"/transfers/downloads/{segment(username)}/{transfer_id}?remove=false")
 
     @app.get("/api/musicbrainz/releases")
-    def releases(query: str):
+    def releases(query: str, offset: int = Query(0, ge=0, le=10000), limit: int = Query(15, ge=1, le=100)):
         if len(query.strip()) < 2 or len(query) > 300:
             raise HTTPException(400, "Enter between 2 and 300 characters")
-        return search_releases(query.strip(), settings.outbound_proxy)
+        if offset == 0 and limit == 15:
+            return search_releases(query.strip(), settings.outbound_proxy)
+        return search_releases(query.strip(), settings.outbound_proxy, offset=offset, limit=limit)
 
     @app.post("/api/imports/preview")
     def preview_import(data: Preview):

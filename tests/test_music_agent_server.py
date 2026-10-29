@@ -132,6 +132,47 @@ def test_resume_accepts_empty_body_and_queue_full_does_not_change_task(server):
     assert status == 202 and body["status"] == "queued"
 
 
+def test_post_duplicate_requeues_retryable_task_and_active_duplicate_is_idempotent(server):
+    owner = server[0]
+    task = {"id": "6e909c3b-a653-4a7d-9d29-2c5019849a2e", "request": "madk1d", "phase": "start",
+            "status": "needs_review", "origin": "web", "manager_url": "http://localhost:8080"}
+    owner.store.save(task)
+    started, release = threading.Event(), threading.Event()
+    calls = []
+
+    class Child:
+        def wait(self):
+            started.set()
+            release.wait(2)
+            return 0
+
+    def popen(*_args, **_kwargs):
+        calls.append(1)
+        return Child()
+
+    owner.popen = popen
+    status, retried = request(server, "/v1/tasks", method="POST", body={"request": "madk1d"})
+    assert status == 202 and retried["id"] == task["id"] and retried["status"] == "queued"
+    assert started.wait(1)
+    for _ in range(3):
+        status, repeated = request(server, "/v1/tasks", method="POST", body={"request": "madk1d"})
+        assert status == 202 and repeated["id"] == task["id"]
+    assert len(calls) == 1
+    release.set()
+
+
+def test_retryable_duplicate_at_capacity_does_not_change_saved_state(server):
+    owner = server[0]
+    task = {"id": "6e909c3b-a653-4a7d-9d29-2c5019849a2e", "request": "same request", "phase": "start",
+            "status": "needs_review", "origin": "web", "manager_url": "http://localhost:8080"}
+    owner.store.save(task)
+    owner.pending = owner.capacity
+    status, body = request(server, "/v1/tasks", method="POST", body={"request": "same request"})
+    assert status == 409
+    saved = owner.store.load(task["id"])
+    assert saved["status"] == "needs_review"
+
+
 def test_status_sanitizes_transfer_and_import_result(server):
     owner = server[0]
     task = {"id": "ab9957eb-38af-44d0-b21b-117c6cf3279f", "request": "Artist", "phase": "done",

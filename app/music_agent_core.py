@@ -16,6 +16,12 @@ class AgentError(RuntimeError):
     """An actionable, sanitized workflow failure."""
 
 
+class InboxSpaceError(AgentError):
+    """The manager refused a queue request before contacting a peer."""
+    reason = 'inbox_space'
+    details = []
+
+
 class SearchUnavailable(AgentError):
     """A completed Soulseek search that received no peer replies."""
 
@@ -74,6 +80,8 @@ class MusicAPI:
             return response.json()
         except httpx.HTTPStatusError as error:
             code = error.response.status_code
+            if code == 507 and method == 'POST' and path == '/api/soulseek/downloads':
+                raise InboxSpaceError('Not enough free space in Inbox. Free space and retry this request.') from None
             if code in (401, 403):
                 message = "Manager authentication failed. Check the private API configuration."
             elif code == 502 and path.startswith('/api/musicbrainz/'):
@@ -161,7 +169,41 @@ def _get_search(api, query, wait, progress, *, mode="standard"):
     raise AgentError("Soulseek search timed out before results were complete.")
 
 
-def search_sources(api, release, *, wait=70, progress=None):
+def _collect_source_groups(groups, responses, release):
+    artist, album = _release_artist(release), _release_title(release)
+    for peer in responses:
+        username = peer.get("username")
+        if not isinstance(username, str) or not username: continue
+        for file in peer.get("files", []) if isinstance(peer.get("files", []), list) else []:
+            if not isinstance(file, dict): continue
+            path, size = file.get("filename"), file.get("size")
+            if not isinstance(path, str) or not _safe_remote(path): continue
+            normalized_path = path.replace("\\", "/")
+            remote = PurePosixPath(normalized_path)
+            if remote.suffix.lower() != ".flac": continue
+            if type(size) is not int or size <= 0: continue
+            parts = remote.parts
+            parent_parts = list(parts[:-1])
+            if parent_parts and re.match(r"^(cd|disc)\s*0*\d+$", parent_parts[-1], re.I): parent_parts.pop()
+            directory = "/".join(parent_parts)
+            if not directory or not (normalize(artist) in normalize(directory) and normalize(album) in normalize(directory)): continue
+            key = (username, directory)
+            group = groups.setdefault(key, {"username": username, "directory": directory, "files": {}, "free_slots": peer.get("hasFreeUploadSlot"), "speed": peer.get("uploadSpeed"), "queue": peer.get("queueLength")})
+            if path in group["files"] and group["files"][path] != size: group["files"].pop(path, None); group["conflict"] = True
+            elif not group.get("conflict"): group["files"][path] = size
+
+
+def sources_from_responses(responses, release):
+    groups = {}
+    _collect_source_groups(groups, responses, release)
+    return sort_sources(build_sources(groups, release))
+
+
+def search_sources(api, release, *, wait=70, progress=None, initial_responses=None):
+    if initial_responses is not None:
+        initial = sources_from_responses(initial_responses, release)
+        if initial:
+            return initial
     artist, album = _release_artist(release), _release_title(release)
     combined = f"{artist} {album}".strip()
     attempts = [(combined, "standard")]
@@ -178,26 +220,7 @@ def search_sources(api, release, *, wait=70, progress=None):
             peer_files = peer.get("files", [])
             if isinstance(peer_files, list): file_count += len(peer_files)
         diagnostics.append({"query": query, "mode": mode, "replies": len(responses), "files": file_count, "terminal": "completed"})
-        for peer in responses:
-            username = peer.get("username")
-            if not isinstance(username, str) or not username: continue
-            for file in peer.get("files", []) if isinstance(peer.get("files", []), list) else []:
-                if not isinstance(file, dict): continue
-                path, size = file.get("filename"), file.get("size")
-                if not isinstance(path, str) or not _safe_remote(path): continue
-                normalized_path = path.replace("\\", "/")
-                remote = PurePosixPath(normalized_path)
-                if remote.suffix.lower() != ".flac": continue
-                if type(size) is not int or size <= 0: continue
-                parts = remote.parts
-                parent_parts = list(parts[:-1])
-                if parent_parts and re.match(r"^(cd|disc)\s*0*\d+$", parent_parts[-1], re.I): parent_parts.pop()
-                directory = "/".join(parent_parts)
-                if not directory or not (normalize(artist) in normalize(directory) and normalize(album) in normalize(directory)): continue
-                key = (username, directory)
-                group = groups.setdefault(key, {"username": username, "directory": directory, "files": {}, "free_slots": peer.get("hasFreeUploadSlot"), "speed": peer.get("uploadSpeed"), "queue": peer.get("queueLength")})
-                if path in group["files"] and group["files"][path] != size: group["files"].pop(path, None); group["conflict"] = True
-                elif not group.get("conflict"): group["files"][path] = size
+        _collect_source_groups(groups, responses, release)
 
     for query, mode in attempts:
         collect(query, mode)
@@ -298,7 +321,13 @@ def discover_inbox(api, source):
 def get_match(api, path, release):
     result = api.post("/api/musicbrainz/match", json={"path":path, "artist":_release_artist(release), "album":_release_title(release)})
     candidate = next((x for x in result.get("candidates", []) if x.get("id") == result.get("recommended_release_id")), {})
-    if result.get("recommended_release_id") != release.get("id"): raise AgentError("Manager recommended a different release. Review the match manually.")
+    if result.get("recommended_release_id") != release.get("id"):
+        if release.get('accept_recommended_edition') is not True:
+            raise AgentError("Manager recommended a different release. Review the match manually.")
+        try:
+            UUID(result.get('recommended_release_id'))
+        except (ValueError, TypeError, AttributeError):
+            raise AgentError('No unambiguous release was identified. Review the match manually.') from None
     confidence = candidate.get("confidence")
     if normalize(candidate.get("artist")) != normalize(_release_artist(release)) or normalize(candidate.get("title")) != normalize(_release_title(release)): raise AgentError("The matched artist or album does not match the selection.")
     if candidate.get("tracks") != _track_count(release) or type(candidate.get("missing_tracks")) is not int or candidate["missing_tracks"] != 0 or type(candidate.get("extra_files")) is not int or candidate["extra_files"] != 0 or not _finite_confidence(confidence): raise AgentError("Track match is incomplete or below 95% confidence.")

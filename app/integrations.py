@@ -46,13 +46,14 @@ class Soulseek:
             raise ConnectionFailure("SLSKD_ADMIN_UNREACHABLE", "The slskd administrative API is unavailable.", stage="slskd_api", hint="Check slskd availability and SLSKD_URL.") from None
 
 
-def search_releases(query, outbound_proxy=""):
+def search_releases(query, outbound_proxy="", *, offset=0, limit=15):
     # Shared with the beets matcher: one MusicBrainz request at a time.
     with musicbrainz_lock:
         try:
             proxy = parse_proxy(outbound_proxy)
             response = httpx.get("https://musicbrainz.org/ws/2/release/",
-                                 params={"query": query, "fmt": "json", "limit": 15},
+                                 params={"query": query, "fmt": "json", "limit": limit,
+                                         **({"offset": offset} if offset > 0 else {})},
                                  headers={"User-Agent": "meandmymusic/0.7 (https://github.com/fxmfxmfx/meandmymusic)"}, timeout=25, proxy=proxy.url if proxy else None, trust_env=False)
             response.raise_for_status()
             return [{"id": r["id"], "title": r.get("title", ""), "date": r.get("date", ""),
@@ -60,7 +61,9 @@ def search_releases(query, outbound_proxy=""):
                      "country": r.get("country", ""), "status": r.get("status", ""),
                      "tracks": r.get("track-count", 0), "score": r.get("score", 0),
                      "format": ", ".join(m.get("format", "") for m in r.get("media", [])),
-                     "disambiguation": r.get("disambiguation", "")}
+                     "disambiguation": r.get("disambiguation", ""),
+                     "release_group": (r.get("release-group") or {}).get("id", ""),
+                     "primary_type": (r.get("release-group") or {}).get("primary-type", r.get("type", ""))}
                     for r in response.json().get("releases", [])]
         except (httpx.HTTPError, ValueError) as error:
             raise HTTPException(502, "MusicBrainz is unavailable. Try again later.") from error

@@ -60,7 +60,7 @@ if [[ -e "$install_root" ]]; then
     for entry in "$install_root/app"/* "$install_root/app"/.[!.]* "$install_root/app"/..?*; do
       [[ -e "$entry" ]] || continue
       case "${entry##*/}" in
-      __init__.py | music_agent.py | music_agent_core.py | music_agent_server.py) ;;
+      __init__.py | music_agent.py | music_agent_core.py | music_agent_server.py | music_agent_batch.py | music_agent_catalog.py | music_agent_schema.py) ;;
       __pycache__)
         [[ -d "$entry" && ! -L "$entry" ]] || die 'Refusing unsafe app/__pycache__ path.'
         for cache_file in "$entry"/*; do
@@ -97,7 +97,7 @@ chmod 644 -- "$model_target"
 
 require_real_path "$install_root/app"
 install -d -o root -g root -m 755 -- "$install_root/app"
-for module in __init__.py music_agent.py music_agent_core.py music_agent_server.py; do
+for module in __init__.py music_agent.py music_agent_core.py music_agent_server.py music_agent_batch.py music_agent_catalog.py music_agent_schema.py; do
   require_real_path "$install_root/app/$module"
   install -o root -g root -m 644 -- "$project_root/app/$module" "$install_root/app/$module"
 done

@@ -373,6 +373,12 @@ test('music assistant submits safely, preserves editing through polling and repo
   assert.equal(await input.evaluate(el=>el===document.activeElement),true,'Polling preserves input focus');
   assert.deepEqual(await input.evaluate(el=>[el.selectionStart,el.selectionEnd]),[6,6],'Polling preserves the caret');
 
+  task.phase='artist';task.status='running';task.batch={artist:'madk1d',total:2,completed:1,needs_review:1,items:[{id:'child',album:'Album <img src=x>',status:'needs_review',phase:'sources',error:'Source <script>unavailable</script>'}]};
+  await page.evaluate(()=>loadMusicAi());
+  assert.match(await page.locator('.music-ai-task').textContent(),/1 of 2 albums imported/);
+  assert.equal(await page.locator('.music-ai-task li img, .music-ai-task li script').count(),0);
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true);
+
   failNextPost=true;await input.fill('A request that fails');await page.locator('#music-ai-form button[type="submit"]').click();
   await page.getByRole('alert').filter({hasText:'Music assistant is unavailable right now.'}).waitFor();
   assert.equal(await input.inputValue(),'A request that fails','Failed request remains editable');

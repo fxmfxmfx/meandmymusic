@@ -10,7 +10,11 @@ exposes its API only on `127.0.0.1:8081`.
 Open **Music assistant** in the manager, enter an artist or album and select
 **Find and import**. Requests run in the background; closing the page does not
 stop them. The page shows the selected album, source, download progress and
-import outcome. Requests that need a decision stop for review instead of
+import outcome. An artist-only request, such as `madk1d`, processes verified
+albums and EPs. `Download all albums of Artist` selects the same mode. Each
+album has its own progress and result; a missing source does not stop the others.
+
+Requests that need a decision stop for review instead of
 guessing. **Retry** resumes a saved request without restarting completed work.
 
 The model loads automatically for an inference request. After five seconds
@@ -44,7 +48,8 @@ provided.
 Run `scripts/install_music_ai.sh` as root from a checkout or copied project
 snapshot containing the agent modules. The installer copies only
 `app/__init__.py`, `app/music_agent.py`, `app/music_agent_core.py` and
-`app/music_agent_server.py` to
+`app/music_agent_server.py`, `app/music_agent_batch.py`,
+`app/music_agent_catalog.py` and `app/music_agent_schema.py` to
 `/opt/music-ai/app`, creates a dedicated venv with `httpx==0.28.1` constrained
 by the project's `requirements.lock`, and installs
 `/usr/local/bin/music-ai`. Debian needs `python3-venv` installed. It refuses
@@ -91,8 +96,12 @@ Automatic import is limited to an exact recommended edition that matches at
 least 95% match confidence and has a complete preview. Agent previews explicitly
 keep Inbox originals, even when cleanup is enabled for other imports.
 The score is a ranking signal, not a probability. Inbox originals remain. An
-artist-only request may select one album only from verified releases; ambiguous
-results stop for review. Ambiguous matches, incomplete previews and failed checks
+artist-only request uses a bounded MusicBrainz catalog of albums and EPs, not
+singles. Catalog discovery is limited to 1,000 editions and 50 albums; exceeding
+these limits requires a narrower request before downloads start. Repeated
+editions are grouped, and albums share one initial Soulseek search. A batch can
+use a complete, unambiguous recommended edition of the same artist, title and
+track count. Ambiguous matches, incomplete previews and failed checks
 stop automation and require manual review. These conditions do not authorize
 permanent deletion or other actions beyond the API workflow.
 
@@ -102,7 +111,9 @@ checks the FLAC track count, then ranks sources by free slots, shortest queue
 and highest reported speed. Reported availability is not a guarantee that a
 peer will begin transferring. Format checks use `.flac` filenames; the agent
 does not prove lossless provenance or perform audio fingerprint recognition.
-MusicBrainz matching and preview checks run after the download.
+MusicBrainz matching and preview checks run after the download. New downloads
+reserve the remaining bytes of existing transfers and leave 256 MiB free in
+Inbox. A space refusal remains retryable once space is available.
 
 If the combined artist/album search finds no complete source, the agent tries
 an extended search using the album title. Artist and album checks still apply

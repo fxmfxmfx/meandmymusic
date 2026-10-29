@@ -19,6 +19,21 @@ def test_soulseek_adapter_contract(auth, monkeypatch):
     assert auth.post("/api/soulseek/downloads", json={"username": "user", "files": []}).status_code == 422
 
 
+def test_download_budget_includes_pending_transfers(auth, monkeypatch):
+    from app.integrations import Soulseek
+    posted = []
+    async def request(self, method, path, data=None):
+        if method == 'GET':
+            return [{'username': 'Other', 'directories': [{'files': [
+                {'filename': 'Queued.flac', 'size': 80, 'bytesTransferred': 0, 'state': 'Queued, Remotely'}]}]}]
+        posted.append(data)
+        return {}
+    monkeypatch.setattr(Soulseek, 'request', request)
+    monkeypatch.setattr('app.main.shutil.disk_usage', lambda _: SimpleNamespace(free=256 * 1024 ** 2 + 100))
+    result = auth.post('/api/soulseek/downloads', json={'username': 'Peer', 'files': [{'filename': 'Next.flac', 'size': 30}]})
+    assert result.status_code == 507 and not posted
+
+
 def test_download_request_preserves_active_and_successful_transfers(auth, monkeypatch):
     from app.integrations import Soulseek
     records = [{"filename": "Album/1.flac", "size": 10, "state": "Queued, Remotely"},
