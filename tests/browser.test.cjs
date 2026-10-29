@@ -331,6 +331,60 @@ test('Soulseek search filters, revision polling, stop and filtered nested downlo
  }
 });
 
+test('music assistant submits safely, preserves editing through polling and reports model and task state on mobile',async()=>{
+ await page.setViewportSize({width:390,height:844});
+ let task=null,modelState='ready',failNextPost=false,releasePost,markPostStarted;
+ const postStarted=new Promise(resolve=>markPostStarted=resolve),postGate=new Promise(resolve=>releasePost=resolve);
+ let postCount=0;
+ await page.route('**/api/music-ai',route=>route.fulfill({json:{configured:true,model_state:modelState,tasks:task?[task]:[]}}));
+ await page.route('**/api/music-ai/tasks',async route=>{
+  if(route.request().method()!=='POST'){await route.fulfill({status:404,json:{detail:'Not found'}});return;}
+  postCount++;const body=route.request().postDataJSON();
+  if(failNextPost){failNextPost=false;await route.fulfill({status:503,json:{detail:'Music assistant is unavailable right now.'}});return;}
+  markPostStarted(body);await postGate;
+  task={id:'11111111-1111-4111-8111-111111111111',request:body.request,status:'done',phase:'done',intent:{artist:'Artist <script>safe</script>',album:'Album <img src=x onerror=alert(1)>'},source:{username:'<svg onload=alert(1)>Peer',directory:'Shared Album',tracks:12,total_bytes:100},transfer:{bytes:50,total_bytes:100,files:2},result:{artist:'Artist',album:'Album',files:12,destinations:['Artist/Album']}};
+  modelState='sleeping';await route.fulfill({status:202,json:{id:task.id,request:body.request,status:'queued'}});
+ });
+ await page.route('**/api/music-ai/tasks/*/resume',route=>route.fulfill({status:202,json:{id:'11111111-1111-4111-8111-111111111111',status:'queued'}}));
+ try{
+  await page.reload();await page.locator('[data-nav="music-ai"]').click();
+  await page.getByLabel('Artist or album').waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth),true,'390px layout has no horizontal page overflow');
+  const input=page.getByLabel('Artist or album');await input.fill('  Artist <img src=x onerror=alert(1)>  ');
+  await page.locator('#music-ai-form button[type="submit"]').click();
+  const body=await Promise.race([postStarted,new Promise((_,reject)=>setTimeout(()=>reject(new Error('POST did not start')),5000))]);
+  assert.deepEqual(body,{request:'Artist <img src=x onerror=alert(1)>'});
+  assert.equal(await page.locator('#music-ai-form button[type="submit"]').isDisabled(),true);
+  await page.locator('#music-ai-form button[type="submit"]').click({force:true});
+  assert.equal(postCount,1,'A pending request cannot be submitted twice');
+  releasePost();
+  await page.locator('.music-ai-task').waitFor();
+  assert.match(await page.locator('.music-ai-task').textContent(),/Artist <script>safe<\/script>.*Album <img/);
+  assert.match(await page.locator('.music-ai-task').textContent(),/Peer/);
+  assert.equal(await page.locator('.music-ai-task script, .music-ai-task img, .music-ai-task svg').count(),0,'Remote values render as text');
+  assert.equal(await page.locator('.music-ai-progress progress').getAttribute('value'),'50');
+  await page.getByText('Model unloaded').waitFor();
+  assert.equal(await page.locator('#music-ai-request').inputValue(),'','Successful request clears the input');
+
+  await input.fill('Caret position test');await input.evaluate(el=>{el.focus();el.setSelectionRange(6,6);});
+  await page.waitForFunction(()=>document.querySelector('.music-ai-model')?.textContent.includes('Model unloaded')&&document.querySelector('.music-ai-task'));
+  await page.waitForTimeout(3200);
+  assert.equal(await input.inputValue(),'Caret position test');
+  assert.equal(await input.evaluate(el=>el===document.activeElement),true,'Polling preserves input focus');
+  assert.deepEqual(await input.evaluate(el=>[el.selectionStart,el.selectionEnd]),[6,6],'Polling preserves the caret');
+
+  failNextPost=true;await input.fill('A request that fails');await page.locator('#music-ai-form button[type="submit"]').click();
+  await page.getByRole('alert').filter({hasText:'Music assistant is unavailable right now.'}).waitFor();
+  assert.equal(await input.inputValue(),'A request that fails','Failed request remains editable');
+  await fs.mkdir('output/playwright',{recursive:true});
+  await page.screenshot({path:'output/playwright/music-assistant-mobile.png',fullPage:true,animations:'disabled'});
+  assert.deepEqual(errors,[]);
+ }finally{
+  await page.unroute('**/api/music-ai');await page.unroute('**/api/music-ai/tasks');await page.unroute('**/api/music-ai/tasks/*/resume');
+  releasePost?.();
+ }
+});
+
 test('a completed empty Soulseek search clears the waiting state in the browser',async()=>{
  await page.setViewportSize({width:1440,height:1000});
  let polls=0;

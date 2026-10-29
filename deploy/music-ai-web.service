@@ -1,0 +1,25 @@
+[Unit]
+Description=Music assistant request service
+After=network.target music-ai-llm.service
+Wants=music-ai-llm.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/music-ai
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=MUSIC_AI_CONFIG=/etc/music-ai/config.json
+Environment=MUSIC_AI_STATE=/var/lib/music-ai/tasks
+EnvironmentFile=/etc/music-ai/web.env
+ExecStart=/opt/music-ai/.venv/bin/python -m app.music_agent_server
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/music-ai
+# A request-service restart must allow an existing CLI observer to finish.
+KillMode=process
+
+[Install]
+WantedBy=multi-user.target

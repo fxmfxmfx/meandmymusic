@@ -60,7 +60,7 @@ if [[ -e "$install_root" ]]; then
     for entry in "$install_root/app"/* "$install_root/app"/.[!.]* "$install_root/app"/..?*; do
       [[ -e "$entry" ]] || continue
       case "${entry##*/}" in
-      __init__.py | music_agent.py | music_agent_core.py) ;;
+      __init__.py | music_agent.py | music_agent_core.py | music_agent_server.py) ;;
       __pycache__)
         [[ -d "$entry" && ! -L "$entry" ]] || die 'Refusing unsafe app/__pycache__ path.'
         for cache_file in "$entry"/*; do
@@ -97,7 +97,7 @@ chmod 644 -- "$model_target"
 
 require_real_path "$install_root/app"
 install -d -o root -g root -m 755 -- "$install_root/app"
-for module in __init__.py music_agent.py music_agent_core.py; do
+for module in __init__.py music_agent.py music_agent_core.py music_agent_server.py; do
   require_real_path "$install_root/app/$module"
   install -o root -g root -m 644 -- "$project_root/app/$module" "$install_root/app/$module"
 done
@@ -123,6 +123,11 @@ trap - EXIT
 
 require_real_path /etc/systemd/system/music-ai-llm.service
 install -o root -g root -m 644 -- "$project_root/deploy/music-ai-llm.service" /etc/systemd/system/music-ai-llm.service
+require_real_path /etc/systemd/system/music-ai-web.service
+install -o root -g root -m 644 -- "$project_root/deploy/music-ai-web.service" /etc/systemd/system/music-ai-web.service
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable --now music-ai-llm.service
+if [[ -f "$config_dir/web.env" && ! -L "$config_dir/web.env" ]]; then
+  /usr/bin/systemctl enable --now music-ai-web.service
+fi
 printf 'Installed music-ai. Configure %s/config.json before using the CLI.\n' "$config_dir"

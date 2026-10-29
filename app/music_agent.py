@@ -216,6 +216,8 @@ class TaskStore:
 def summary(task):
     value = {k: task[k] for k in ("id", "request", "phase", "status", "intent", "release",
              "inbox", "preview_id", "import_id", "result", "error", "error_code", "search_attempts") if k in task}
+    if "transfer" in task:
+        value["transfer"] = task["transfer"]
     if "source" in task:
         source = task["source"]
         value["source"] = {k: source.get(k) for k in ("username", "directory", "total_bytes")}
@@ -287,6 +289,10 @@ def run_workflow(task, store, api, model, *, plan=False, wait=3600, poll=10):
             signature = (status.get("status"), status.get("bytes"), status.get("files"))
             if signature != last:
                 emit("download", task=task["id"], **status)
+                task['transfer'] = {key: status.get(key, 0) for key in ('bytes', 'total_bytes', 'files')}
+                task['transfer']['expected'] = len(task['source']['files'])
+                task['updated'] = time.time()
+                store.save(task)
                 last = signature
             if status["status"] == "complete":
                 break

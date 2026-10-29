@@ -13,6 +13,8 @@ class Settings:
     slskd_url: str = field(default_factory=lambda: os.getenv("SLSKD_URL", "http://localhost:5030").rstrip("/"))
     slskd_key: str = field(default_factory=lambda: os.getenv("SLSKD_API_KEY", ""), repr=False)
     navidrome_url: str = field(default_factory=lambda: os.getenv("NAVIDROME_URL", ""))
+    music_ai_url: str = field(default_factory=lambda: os.getenv("MUSIC_AI_URL", "").rstrip("/"))
+    music_ai_token: str = field(default_factory=lambda: os.getenv("MUSIC_AI_TOKEN", ""), repr=False)
     secure_cookie: bool = field(default_factory=lambda: os.getenv("COOKIE_SECURE", "false").lower() == "true")
     slskd_managed_auth: bool = field(default_factory=lambda: os.getenv("SLSKD_MANAGED_AUTH", "false").lower() == "true")
     slskd_admin_user: str = field(default_factory=lambda: os.getenv("SLSKD_ADMIN_USER", "archive"))

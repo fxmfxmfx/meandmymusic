@@ -26,6 +26,7 @@ from app.integrations import Soulseek, search_releases, segment
 from app.store import Store
 from app.uploads import Uploads
 from app.library_stats import LibraryStats
+from app.music_agent_proxy import MusicAgentProxy
 from app.manual_import import preview_manual, apply_manual
 from app.tagger import apply_import, preview, update_catalog_paths, match_album, remove_catalog_paths, update_inbox_paths
 from app.inbox import annotate as annotate_inbox, snapshot, album_paths, imported_sources
@@ -68,6 +69,10 @@ class Preview(BaseModel):
     path: str = Field(min_length=1, max_length=4096)
     release_id: UUID
     keep_source: StrictBool = False
+
+
+class MusicRequest(BaseModel):
+    request: str = Field(min_length=1, max_length=2000)
 
 
 class AlbumMatch(BaseModel):
@@ -115,6 +120,7 @@ def create_app(settings=None):
     uploads = Uploads(settings)
     library_stats = LibraryStats(settings)
     soulseek = Soulseek(settings)
+    music_ai = MusicAgentProxy(settings)
     download_lock = asyncio.Lock()
     account = SoulseekAccount(settings, soulseek)
     worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="beets")
@@ -547,6 +553,20 @@ def create_app(settings=None):
     @app.delete("/api/soulseek/searches/{search_id}")
     async def delete_search(search_id: UUID):
         return await soulseek.request("DELETE", f"/searches/{search_id}")
+
+    @app.get('/api/music-ai')
+    async def music_ai_status():
+        return await music_ai.status()
+
+    @app.post('/api/music-ai/tasks', status_code=202)
+    async def music_ai_request(data: MusicRequest):
+        if not data.request.strip():
+            raise HTTPException(400, 'Enter an artist or album request.')
+        return await music_ai.submit(data.request.strip())
+
+    @app.post('/api/music-ai/tasks/{task_id}/resume', status_code=202)
+    async def music_ai_resume(task_id: UUID):
+        return await music_ai.resume(str(task_id))
 
     @app.post("/api/soulseek/downloads")
     async def download(data: Download):

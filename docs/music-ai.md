@@ -5,11 +5,46 @@ local llama.cpp model. It needs API credentials only. It does not use SSH or
 access CT105 as root. The model service receives no manager credentials and
 exposes its API only on `127.0.0.1:8081`.
 
+## Web requests
+
+Open **Music assistant** in the manager, enter an artist or album and select
+**Find and import**. Requests run in the background; closing the page does not
+stop them. The page shows the selected album, source, download progress and
+import outcome. Requests that need a decision stop for review instead of
+guessing. **Retry** resumes a saved request without restarting completed work.
+
+The model loads automatically for an inference request. After five seconds
+without inference work, llama.cpp unloads its weights and KV cache. Downloads,
+matching and import continue without the model in memory. Status polling does
+not wake it. A small model HTTP process remains available for the next request.
+
+The optional `music-ai-web` service accepts requests from the manager over a
+private network. Create `/etc/music-ai/web.env` as a root-owned mode 0600 file:
+
+```dotenv
+MUSIC_AI_BIND=AGENT_PRIVATE_ADDRESS
+MUSIC_AI_PORT=8082
+MUSIC_AI_ALLOWED_CLIENTS=MANAGER_PRIVATE_ADDRESS
+MUSIC_AI_WEB_TOKEN=LONG_RANDOM_SHARED_TOKEN
+```
+
+Use a random token of at least 32 characters. In the manager's `.env`, configure
+`MUSIC_AI_URL=http://AGENT_PRIVATE_ADDRESS:8082` and the same token as
+`MUSIC_AI_TOKEN`. Recreate manager after changing its environment. The browser
+uses the manager's existing session and never receives this token. Agent API
+access is limited by both the token and the source address allowlist.
+
+The installer enables `music-ai-web` when its environment file exists. Otherwise
+run `systemctl enable --now music-ai-web` after provisioning it. The manager's
+assistant page reports an unconfigured service until both optional settings are
+provided.
+
 ## Install inside CT111
 
 Run `scripts/install_music_ai.sh` as root from a checkout or copied project
-snapshot containing the three agent modules. The installer copies only
-`app/__init__.py`, `app/music_agent.py` and `app/music_agent_core.py` to
+snapshot containing the agent modules. The installer copies only
+`app/__init__.py`, `app/music_agent.py`, `app/music_agent_core.py` and
+`app/music_agent_server.py` to
 `/opt/music-ai/app`, creates a dedicated venv with `httpx==0.28.1` constrained
 by the project's `requirements.lock`, and installs
 `/usr/local/bin/music-ai`. Debian needs `python3-venv` installed. It refuses

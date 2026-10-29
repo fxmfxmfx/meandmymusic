@@ -1,7 +1,7 @@
 'use strict';
 const app = document.querySelector('#app');
 const modal = document.querySelector('#modal');
-const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), cancellingFolders:new Set(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}};
+const state = {page:'library', path:'', entries:[], selected:null, filter:'', system:null, account:null, authMode:'login', accountBusy:false, accountTimer:null, searchId:null, groups:[], searchQuery:'', searchDone:false, jobs:[], player:null, view:'grid', searchTimer:null, jobTimer:null, transferTimer:null, generation:0, transfers:[], transferSort:'newest', transferFilter:'all', transferSeen:new Map(), downloadBatches:new Map(), transferInitialized:false, transferEpoch:0, treeOpen:new Map(), searchNodes:new Map(), cancellingFolders:new Set(), history:[], historyFilter:'all', preferences:{delete_inbox_after_import:false}, musicAiEpoch:0, musicAiTimer:null, musicAiPollingEpoch:null, musicAiTasks:[], musicAiConfigured:null, musicAiBusy:false, musicAiRequest:'', musicAiSubmitError:''};
 Object.assign(state,{searchEpoch:0,searchPhase:'',searchSort:'speed',searchFormat:'all',searchSlots:false,searchFilter:'',searchLimit:25,searchRevision:null,searchError:null,searchSnapshot:null,searchVersion:0,searchReceivedFiles:0,searchFinishWaitStarted:null,searchMode:'standard',searchSubmittedMode:'standard',searchReported:{files:0,replies:0,locked:0},searchStartedAt:null,searchLimitReached:false,searchWaitingSnapshot:false});
 const paths = {
  disc:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><path d="M5.6 8a7 7 0 0 1 2.7-2.5M18.4 16a7 7 0 0 1-2.7 2.5"/>',
@@ -54,12 +54,12 @@ function showLogin(){
  stopFileSearch();state.fileSearch=null;state.fileSearchError=null;
  clearTimeout(state.libraryTimeTimer);state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;state.libraryStats=null;
  if(state.drag)finishDrag(false);
- clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);state.transferEpoch++;if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();}clearSystemDrop();state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
+ clearInterval(state.searchTimer);clearInterval(state.jobTimer);clearInterval(state.transferTimer);clearInterval(state.accountTimer);clearTimeout(state.musicAiTimer);state.musicAiTimer=null;state.musicAiEpoch++;if(state.upload){state.upload.cancelled=true;state.upload.xhr?.abort();}clearSystemDrop();state.transferInitialized=false;state.transferSeen.clear();state.downloadBatches.clear();state.transfers=[];state.groups=[];state.searchId=null;state.searchDone=false;state.jobs=[];state.account=null;document.querySelector('#download-notices')?.remove();if(modal.open)modal.close();
  app.innerHTML=`<main class="login-screen"><div class="login-theme">${themePicker()}</div><form class="login-form" id="login-form">${brand()}<h1>Open your library</h1><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus><button class="primary" type="submit">Sign in ${icon('arrow')}</button><p class="login-error" id="login-error" role="alert"></p></form></main>`;
 }
 function shell(){
  state.preferenceEdited=false;
- app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.8</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
+ app.innerHTML=`<div class="shell"><aside class="sidebar">${brand()}<nav class="nav" aria-label="Navigation">${[['library','folder','Library'],['inbox','inbox','Inbox'],['soulseek','search','Soulseek'],['music-ai','disc','Music assistant'],['transfers','download','Downloads'],['jobs','jobs','Tasks'],['history','history','History'],['settings','settings','Settings']].map(([id,i,title])=>`<button data-nav="${id}">${icon(i)}${title}</button>`).join('')}</nav><div class="sidebar-bottom"><span class="version">me&my music · 0.8</span></div></aside><main class="main"><div id="content"></div></main></div><div id="player-slot"></div>`;
  navigate(state.page);
  api('/system').then(system=>{if(!document.querySelector('.shell'))return;state.system=system;updateStatus();if(state.page==='settings')renderSettings();clearInterval(state.transferTimer);if(system.slskd_configured||system.slskd){loadTransfers().catch(()=>{});state.transferTimer=setInterval(()=>loadTransfers().catch(()=>{}),4000);}}).catch(error=>toast(error.message,true));
  api('/preferences').then(value=>{if(!document.querySelector('.shell')||state.preferenceEdited)return;state.preferences=value;const checkbox=document.querySelector('#delete-inbox-after-import');if(checkbox)checkbox.checked=value.delete_inbox_after_import;}).catch(error=>toast(error.message,true));
@@ -77,6 +77,7 @@ async function navigate(page,refreshTime=false){
  clearTimeout(state.libraryTimeTimer);state.libraryTimeEpoch=(state.libraryTimeEpoch||0)+1;
  rememberTree('search');rememberTree('transfers');state.generation++;const generation=state.generation;
  clearInterval(state.jobTimer);
+ clearTimeout(state.musicAiTimer);state.musicAiTimer=null;state.musicAiEpoch++;
  if(state.page!==page){state.path='';state.selected=null;state.filter='';}
  state.page=page;
  document.querySelectorAll('[data-nav]').forEach(button=>button.classList.toggle('active',button.dataset.nav===page));
@@ -86,9 +87,52 @@ async function navigate(page,refreshTime=false){
   else if(page==='soulseek')renderSoulseek();
   else if(page==='transfers'){renderTransfers();await loadTransfers();}
   else if(page==='jobs'){await loadJobs();state.jobTimer=setInterval(()=>loadJobs().catch(()=>{}),2500);}
+  else if(page==='music-ai')await loadMusicAi();
   else if(page==='history')await loadHistory();
   else if(page==='settings')renderSettings();
  }catch(error){if(generation===state.generation && document.querySelector('#content'))content.innerHTML=`<div class="error-box">${esc(error.message)}<br><button class="small" data-action="reload">${icon('refresh')} Retry</button></div>`;}
+}
+const musicAiPhaseNames={queued:'Queued',start:'Starting',starting:'Starting',intent:'Identifying album',release:'Finding album',sources:'Finding sources',source:'Choosing source',queuing:'Queuing download',downloading:'Downloading',downloaded:'Download complete',inbox:'Checking Inbox',matched:'Matching album',preview:'Preparing import',reviewed:'Ready to resume',applying:'Importing',importing:'Importing',done:'Complete',needs_review:'Needs review',waiting:'Waiting',superseded:'Superseded',failed:'Failed'};
+function musicAiActive(task){return !['done','failed','needs_review','waiting','superseded'].includes(task.status);}
+function renderMusicAi(){
+ const content=document.querySelector('#content');if(!content||state.page!=='music-ai')return;
+ const oldInput=document.querySelector('#music-ai-request'),hadFocus=oldInput===document.activeElement,selection=hadFocus?[oldInput.selectionStart,oldInput.selectionEnd]:null;if(oldInput)state.musicAiRequest=oldInput.value;
+ const unavailable=state.musicAiConfigured===false;
+ const model=state.musicAiModelState||'unavailable';
+ const modelLabel={sleeping:'Model unloaded',loading:'Loading model…',ready:'Model ready',unavailable:'Model unavailable'}[model]||'Model unavailable';
+ const rows=state.musicAiTasks.map(task=>{
+  const artist=task.intent?.artist||task.release?.artist,album=task.intent?.album||task.release?.title;
+  const transfer=task.transfer||{},progress=Number(transfer.total_bytes)>0?Math.min(100,Math.round(Number(transfer.bytes||0)*100/Number(transfer.total_bytes))):0;
+  const result=task.result||{};
+  return `<article class="music-ai-task"><div class="music-ai-task-heading"><strong>${esc(task.request||'Music request')}</strong><span class="badge">${esc(musicAiPhaseNames[task.status]||musicAiPhaseNames[task.phase]||task.status||'Queued')}</span></div>
+   ${artist||album?`<p class="music-ai-album">${esc([artist,album].filter(Boolean).join(' — '))}</p>`:''}
+   ${task.source?.username?`<p class="muted">Source: ${esc(task.source.username)}${task.source.directory?` · ${esc(task.source.directory)}`:''}</p>`:''}
+   ${transfer.total_bytes||transfer.files?`<div class="music-ai-progress"><progress max="100" value="${progress}"></progress><span>${esc(String(transfer.files||0))} files · ${esc(size(transfer.bytes||0))}${transfer.total_bytes?` / ${esc(size(transfer.total_bytes))}`:''}</span></div>`:''}
+   ${result.artist||result.album?`<p class="muted">Imported: ${esc([result.artist,result.album].filter(Boolean).join(' — '))}${result.files?` · ${esc(String(result.files))} files`:''}</p>`:''}
+   ${result.destinations?.length?`<p class="muted">Library: ${esc(result.destinations.join(', '))}</p>`:''}
+   ${task.inbox?`<button class="small" data-nav="inbox">Open Inbox</button>`:''}
+   ${task.error?`<p class="music-ai-error" role="alert">${esc(task.error)}</p>`:''}
+   ${['needs_review','waiting'].includes(task.status)?`<button class="small" data-music-ai-resume="${esc(task.id)}" ${state.musicAiBusy?'disabled':''}>${task.status==='needs_review'?'Retry':'Continue'}</button>`:''}
+  </article>`;
+ }).join('');
+ content.innerHTML=`${heading('','Music assistant')}<section class="music-ai-panel"><div class="music-ai-model"><span class="dot${model==='ready'?'':' off'}"></span>${esc(modelLabel)}</div>${model==='loading'?'<p class="muted">Starting the model may take a minute.</p>':''}${unavailable?'<p class="music-ai-unavailable">Music assistant is not configured.</p>':`<form id="music-ai-form" class="music-ai-form"><label for="music-ai-request">Artist or album</label><textarea id="music-ai-request" name="request" maxlength="2000" required placeholder="Artist or album">${esc(state.musicAiRequest)}</textarea><p class="muted">Find a complete FLAC album, match it and import. Inbox originals are kept.</p><button class="primary" type="submit" ${state.musicAiBusy?'disabled':''}>Find and import ${icon('arrow')}</button><p id="music-ai-error" class="music-ai-error" role="alert">${esc(state.musicAiSubmitError)}</p></form>`}${state.musicAiLoadError?`<p class="music-ai-error" role="alert">${esc(state.musicAiLoadError)}</p>`:''}</section><section class="music-ai-tasks"><h2>Requests</h2>${rows||'<p class="empty">No requests yet.</p>'}</section>`;
+ if(hadFocus){const input=document.querySelector('#music-ai-request');input?.focus();if(selection)input?.setSelectionRange(...selection);}
+}
+async function loadMusicAi(){
+ if(state.page!=='music-ai')return;
+ const epoch=state.musicAiEpoch;
+ if(state.musicAiPollingEpoch===epoch)return;
+ clearTimeout(state.musicAiTimer);state.musicAiTimer=null;state.musicAiPollingEpoch=epoch;
+ try{
+  const data=await api('/music-ai');if(epoch!==state.musicAiEpoch||state.page!=='music-ai')return;
+  state.musicAiLoadError='';state.musicAiConfigured=data.configured===true;state.musicAiModelState=data.model_state||'unavailable';state.musicAiTasks=Array.isArray(data.tasks)?data.tasks:[];renderMusicAi();
+ }catch(error){
+  if(epoch!==state.musicAiEpoch||state.page!=='music-ai')return;
+   state.musicAiLoadError=error.message;state.musicAiModelState='unavailable';state.musicAiTasks=state.musicAiTasks||[];renderMusicAi();
+ }finally{
+  if(state.musicAiPollingEpoch===epoch)state.musicAiPollingEpoch=null;
+  if(epoch===state.musicAiEpoch&&state.page==='music-ai'&&!state.musicAiTimer)state.musicAiTimer=setTimeout(()=>loadMusicAi(),3000);
+ }
 }
 function stopFileSearch(){
  clearTimeout(state.fileSearchTimer);state.fileSearchEpoch=(state.fileSearchEpoch||0)+1;
@@ -784,6 +828,7 @@ document.addEventListener('click',async event=>{
  try{
   if(button.hasAttribute('data-picker-path')){await openMovePicker(button.dataset.pickerPath);return;}
   if(button.dataset.nav){await navigate(button.dataset.nav);return;}
+  if(button.dataset.musicAiResume){button.disabled=true;state.musicAiBusy=true;try{await api(`/music-ai/tasks/${encodeURIComponent(button.dataset.musicAiResume)}/resume`,{method:'POST'});await loadMusicAi();}finally{state.musicAiBusy=false;renderMusicAi();}return;}
   if(button.hasAttribute('data-path')){await openFolder(button.dataset.path);return;}
   if(button.dataset.open){await openFolder(button.dataset.open);return;}
   if(button.dataset.play){playFile(button.dataset.play);return;}
@@ -840,6 +885,15 @@ document.addEventListener('submit',async event=>{
  event.preventDefault();const form=event.target;const values=new FormData(form);const submit=document.querySelector(`[form="${form.id}"]`)||form.querySelector('button[type="submit"]');if(submit)submit.disabled=true;
  try{
   if(form.id==='login-form'){await api('/login',{method:'POST',body:{password:values.get('password')}});shell();}
+  else if(form.id==='music-ai-form'){
+   if(state.musicAiBusy)return;
+   const epoch=state.musicAiEpoch;
+   const request=String(values.get('request')||'').trim();if(!request||request.length>2000)throw new Error('Enter an artist or album.');
+   state.musicAiRequest=request;state.musicAiSubmitError='';state.musicAiBusy=true;const button=form.querySelector('button[type="submit"]');if(button)button.disabled=true;
+   try{await api('/music-ai/tasks',{method:'POST',body:{request}});if(epoch!==state.musicAiEpoch||state.page!=='music-ai')return;state.musicAiRequest='';const input=document.querySelector('#music-ai-request');if(input)input.value='';await loadMusicAi();}
+   catch(error){if(epoch===state.musicAiEpoch&&state.page==='music-ai'){state.musicAiSubmitError=error.message;state.musicAiRequest=request;}}
+   finally{state.musicAiBusy=false;renderMusicAi();if(epoch===state.musicAiEpoch)document.querySelector('#music-ai-request')?.focus();}
+  }
   else if(form.id==='soulseek-account-form'){
    const mode=form.dataset.mode;const body={username:String(values.get('username')).trim(),password:String(values.get('soulseek_password')),remember:values.get('remember')==='on'};
    if(mode==='register'){body.password_confirm=String(values.get('password_confirm'));if(body.password!==body.password_confirm)throw new Error('Passwords do not match');}

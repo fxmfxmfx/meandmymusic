@@ -24,6 +24,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     artist:'Test Artist', album:'Test Album', confidence:98, rows:[{source:'Album/01.wav', destination:'Test Artist/2026 - Test Album/1-01 Track.wav',
       before:{title:'Old title', artist:'Unknown'}, after:{title:'Correct title', artist:'Test Artist',album:'Test Album',year:2026,disc:1,track:1,tracktotal:1}}]}};
   let transfers=scenario.transfers||[], jobs=[plan], events=scenario.events||[], preferences={delete_inbox_after_import:Boolean(scenario.cleanup)};
+  let musicAi=scenario.musicAi||{configured:true,model_state:'ready',tasks:[]};
   if(scenario.cleanup){plan.result.delete_source=true;plan.result.source='Album';}
   if(scenario.manual){plan.result.mode='manual';plan.result.source='Artist <script>';plan.result.destination='Second Artist/Offline Album';}
   if(scenario.matchJob){plan.kind='match';plan.source='Artist <script>';plan.result={source:plan.source,plan:plan.result};}
@@ -36,6 +37,9 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     calls.push({path:path.pathname, params:path.searchParams, method, body});
     let result = {}, status = 200;
     if(path.pathname==='/api/session') {result={authenticated};if(!authenticated)status=401;}
+    else if(path.pathname==='/api/music-ai') result=scenario.musicAiPoll?await scenario.musicAiPoll(calls):musicAi;
+    else if(path.pathname==='/api/music-ai/tasks'&&method==='POST') {if(scenario.musicAiSubmit)result=await scenario.musicAiSubmit(body,calls);else{result={id:'music-task'};musicAi={...musicAi,tasks:[...(musicAi.tasks||[]),{id:'music-task',request:body.request,status:'queued',phase:'queued'}]};}}
+    else if(path.pathname.startsWith('/api/music-ai/tasks/')&&path.pathname.endsWith('/resume')&&method==='POST') result={id:path.pathname.split('/')[4],status:'queued'};
     else if(path.pathname==='/api/login') {authenticated=true;result={ok:true};}
     else if(path.pathname==='/api/preferences'){if(method==='PATCH')preferences=body;result=preferences;}
     else if(path.pathname==='/api/musicbrainz/match-all')result={queued:1,jobs:[{id:planId}],skipped_imported:1,skipped_matched:1,active:0};
@@ -73,7 +77,7 @@ async function fixture(authenticated=true, authFailure=null, matchOverrides={}, 
     return {ok:status<400,status,json:async()=>result};
   };
   window.eval(fs.readFileSync('app/static/theme.js','utf8'));
-  window.eval(code+'\nwindow.testPollTransfers=loadTransfers;window.testPollSearch=pollSearch;window.testReadDropped=readDropped;');
+  window.eval(code+'\nwindow.testPollTransfers=loadTransfers;window.testPollSearch=pollSearch;window.testReadDropped=readDropped;window.testLoadMusicAi=loadMusicAi;window.testMusicAiState=state;');
   await tick();
   const click = selector => {
     const target=window.document.querySelector(selector);
@@ -98,6 +102,76 @@ test('login opens the archive, escaped filenames render as text, filter works', 
     assert.equal(f.window.document.querySelectorAll('.folder-card').length,1);
     assert.equal(f.window.document.querySelector('.folder-name').textContent,'Second Artist');
     assert.deepEqual(f.errors,[]);
+  } finally {f.close();}
+});
+
+test('Music assistant submits a single request and renders task progress safely', async () => {
+  const f=await fixture();
+  try {
+    f.click('[data-nav="music-ai"]');await tick();
+    const input=f.window.document.querySelector('#music-ai-request');input.value='Artist <img src=x onerror=alert(1)>';
+    f.submit('#music-ai-form');await tick();
+    const call=f.calls.find(item=>item.path==='/api/music-ai/tasks'&&item.method==='POST');
+    assert.deepEqual(call.body,{request:'Artist <img src=x onerror=alert(1)>'});
+    assert.equal(f.window.document.querySelector('#music-ai-request').value,'');
+    assert.equal(f.window.document.querySelectorAll('.music-ai-task img').length,0);
+    assert.ok(f.window.document.querySelector('.music-ai-task').textContent.includes('Artist <img'));
+    assert.equal(f.window.document.querySelector('.music-ai-task .badge').textContent,'Queued');
+  } finally {f.close();}
+});
+
+test('Music assistant polling stays single-flight and keeps watching after a task finishes', async () => {
+  let finishPoll;
+  const f=await fixture(true,null,{}, {musicAiPoll:()=>new Promise(resolve=>{finishPoll=resolve;})});
+  try {
+    f.click('[data-nav="music-ai"]');await tick();
+    f.window.testLoadMusicAi();f.window.testLoadMusicAi();await tick();
+    assert.equal(f.calls.filter(item=>item.path==='/api/music-ai').length,1);
+    finishPoll({configured:true,model_state:'ready',tasks:[{id:'done',request:'Finished',status:'done'}]});await tick();
+    assert.ok(f.window.testMusicAiState.musicAiTimer,'Terminal tasks still schedule a model state poll');
+  } finally {f.close();}
+});
+
+test('Music assistant submit errors survive rerender and preserve the request', async () => {
+  const f=await fixture(true,null,{}, {musicAiSubmit:async()=>{throw new Error('Request could not be queued');}});
+  try {
+    f.click('[data-nav="music-ai"]');await tick();
+    const input=f.window.document.querySelector('#music-ai-request');input.value='Artist request';f.submit('#music-ai-form');await tick();
+    assert.equal(f.window.document.querySelector('#music-ai-error').textContent,'Request could not be queued');
+    assert.equal(f.window.document.querySelector('#music-ai-request').value,'Artist request');
+  } finally {f.close();}
+});
+
+test('Music assistant hides form when unconfigured and shows terminal errors and transfer progress', async () => {
+  const f=await fixture(true,null,{}, {musicAi:{configured:false,model_state:'unavailable',tasks:[]}});
+  try {
+    f.click('[data-nav="music-ai"]');await tick();
+    assert.match(f.window.document.querySelector('#content').textContent,/Music assistant is not configured/);
+    assert.equal(f.window.document.querySelector('#music-ai-form'),null);
+  } finally {f.close();}
+  const g=await fixture(true,null,{}, {musicAi:{configured:true,model_state:'loading',tasks:[{id:'1',request:'<script>x</script>',status:'failed',error:'Remote <b>error</b>',transfer:{bytes:40,total_bytes:80,files:2}}]}});
+  try {
+    g.click('[data-nav="music-ai"]');await tick();
+    assert.equal(g.window.document.querySelectorAll('.music-ai-task script').length,0);
+    assert.equal(g.window.document.querySelector('.music-ai-task .music-ai-error').textContent,'Remote <b>error</b>');
+    assert.equal(g.window.document.querySelector('.music-ai-progress progress').value,50);
+  } finally {g.close();}
+});
+
+test('Music assistant ignores a stale poll after navigation and disables duplicate submits', async () => {
+  let releasePoll, releaseSubmit;
+  const f=await fixture(true,null,{}, {musicAiPoll:(calls)=>calls.filter(item=>item.path==='/api/music-ai').length===1?{configured:true,model_state:'ready',tasks:[]}:new Promise(resolve=>{releasePoll=resolve;}),musicAiSubmit:()=>new Promise(resolve=>{releaseSubmit=resolve;})});
+  try {
+    f.click('[data-nav="music-ai"]');await tick();
+    f.window.testLoadMusicAi();await tick();
+    f.window.document.querySelector('#music-ai-request').value='Slow request';f.submit('#music-ai-form');await tick();
+    assert.equal(f.window.document.querySelector('#music-ai-form button').disabled,true);
+    assert.equal(f.calls.filter(item=>item.path==='/api/music-ai/tasks'&&item.method==='POST').length,1);
+    f.click('[data-nav="library"]');await tick();
+    releasePoll?.({configured:true,model_state:'ready',tasks:[{id:'stale',request:'stale',status:'done'}]});
+    releaseSubmit?.({id:'pending'});await tick();
+    assert.equal(f.window.document.querySelector('.music-ai-task'),null);
+    assert.equal(f.window.document.querySelector('[data-nav="library"]').classList.contains('active'),true);
   } finally {f.close();}
 });
 
@@ -800,6 +874,19 @@ test('Library shows only its total duration and refreshes through the existing b
   assert.equal(doc.querySelector('.browser-toolbar').hidden,true);
   assert.equal(doc.querySelector('#file-filter'),null);
   assert.deepEqual(f.errors,[]);
+ }finally{f.close();}
+});
+
+test('late assistant submission cannot clear a new page draft',async()=>{
+ let finish;
+ const f=await fixture(true,null,{}, {musicAiSubmit:()=>new Promise(resolve=>finish=resolve)});
+ try{
+  f.click('[data-nav="music-ai"]');await tick();
+  f.window.document.querySelector('#music-ai-request').value='First album';f.submit('#music-ai-form');await tick();
+  f.click('[data-nav="library"]');await tick();f.click('[data-nav="music-ai"]');await tick();
+  f.window.document.querySelector('#music-ai-request').value='New draft';
+  finish({id:'old-request'});await tick();
+  assert.equal(f.window.document.querySelector('#music-ai-request').value,'New draft');
  }finally{f.close();}
 });
 
